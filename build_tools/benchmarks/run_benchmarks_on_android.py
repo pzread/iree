@@ -42,9 +42,10 @@ import sys
 
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TextIO, Set
 
-from common.benchmark_definition import (
-    DeviceType, DeviceInfo, BenchmarkInfo, BenchmarkResults, BenchmarkRun,
-    execute_cmd, execute_cmd_and_get_output)
+from common.benchmark_definition import (DeviceType, DeviceInfo, BenchmarkInfo,
+                                         BenchmarkResults, BenchmarkRun,
+                                         execute_cmd,
+                                         execute_cmd_and_get_output)
 from common.benchmark_suite import (BENCHMARK_SUITE_REL_PATH,
                                     compose_info_object,
                                     filter_benchmarks_for_category)
@@ -491,21 +492,21 @@ def get_available_drivers(tool_dir: str, verbose: bool) -> Sequence[str]:
 
 
 def filter_and_run_benchmarks(
-        device_info: DeviceInfo,
-        root_build_dir: str,
-        driver_filter: Optional[str],
-        model_name_filter: Optional[str],
-        mode_filter: Optional[str],
-        tmp_dir: str,
-        normal_benchmark_tool_dir: str,
-        traced_benchmark_tool_dir: Optional[str],
-        trace_capture_tool: Optional[str],
-        skip_benchmarks: Optional[Set[str]],
-        skip_captures: Optional[Set[str]],
-        do_capture: bool = False,
-        keep_going: bool = False,
-        benchmark_min_time: float = 0,
-        verbose: bool = False) -> Tuple[List[str], List[str], List[Exception]]:
+    device_info: DeviceInfo,
+    root_build_dir: str,
+    driver_filter: Optional[str],
+    model_name_filter: Optional[str],
+    mode_filter: Optional[str],
+    tmp_dir: str,
+    normal_benchmark_tool_dir: str,
+    traced_benchmark_tool_dir: Optional[str],
+    trace_capture_tool: Optional[str],
+    skip_benchmarks: Optional[Set[str]],
+    skip_captures: Optional[Set[str]],
+    do_capture: bool = False,
+    keep_going: bool = False,
+    benchmark_min_time: float = 0,
+    verbose: bool = False) -> Tuple[List[str], List[str], List[Exception]]:
   """Filters and runs benchmarks in all categories for the given device.
 
   Args:
@@ -590,8 +591,7 @@ def filter_and_run_benchmarks(
 
 
 def set_cpu_frequency_scaling_governor(governor: str):
-  git_root = execute_cmd_and_get_output(
-      ["git", "rev-parse", "--show-toplevel"])
+  git_root = execute_cmd_and_get_output(["git", "rev-parse", "--show-toplevel"])
   cpu_script = os.path.join(git_root, "build_tools", "benchmarks",
                             "set_android_scaling_governor.sh")
   android_path = adb_push_to_tmp_dir(cpu_script)
@@ -599,8 +599,7 @@ def set_cpu_frequency_scaling_governor(governor: str):
 
 
 def set_gpu_frequency_scaling_policy(policy: str):
-  git_root = execute_cmd_and_get_output(
-      ["git", "rev-parse", "--show-toplevel"])
+  git_root = execute_cmd_and_get_output(["git", "rev-parse", "--show-toplevel"])
   device_model = get_android_device_model()
   gpu_name = get_android_gpu_name()
   if device_model == "Pixel-6" or device_model == "Pixel-6-Pro":
@@ -733,8 +732,7 @@ def parse_arguments():
 
 
 def get_device_info_from_adb(verbose: bool = False):
-  return DeviceInfo(DeviceType.ANDROID,
-                    get_android_device_model(verbose),
+  return DeviceInfo(DeviceType.ANDROID, get_android_device_model(verbose),
                     get_android_cpu_abi(verbose),
                     get_android_cpu_features(verbose),
                     get_android_gpu_name(verbose))
