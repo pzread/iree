@@ -150,7 +150,7 @@ set(X86_64_CPU_TRANSLATION_FLAGS
   "--iree-llvm-target-triple=x86_64-unknown-linux-gnu"
 )
 
-# CPU, Dylib, x86_64, full-inference
+# CPU, Dylib, 1 thread, x86_64, full-inference
 iree_benchmark_suite(
   MODULES
     "${DEEPLABV3_FP32_MODULE}"
@@ -161,17 +161,45 @@ iree_benchmark_suite(
     "${MOBILENET_V3SMALL_MODULE}"
 
   BENCHMARK_MODES
-    "full-inference,default-flags"
+    "1-thread,big-core,full-inference,default-flags"
   TARGET_BACKEND
     "dylib-llvm-aot"
   TARGET_ARCHITECTURE
-    "CPU-X86-64"
+    "CPU-x86-64"
   TRANSLATION_FLAGS
     ${X86_64_CPU_TRANSLATION_FLAGS}
   BENCHMARK_TOOL
     iree-benchmark-module
   DRIVER
     "dylib"
+  RUNTIME_FLAGS
+    "--task_topology_group_count=1"
+)
+
+# CPU, Dylib, 4 threads, x86_64, full-inference
+iree_benchmark_suite(
+  MODULES
+    "${DEEPLABV3_FP32_MODULE}"
+    "${MOBILESSD_FP32_MODULE}"
+    "${POSENET_FP32_MODULE}"
+    "${MOBILEBERT_FP32_MODULE}"
+    "${MOBILENET_V2_MODULE}"
+    "${MOBILENET_V3SMALL_MODULE}"
+
+  BENCHMARK_MODES
+    "4-thread,big-core,full-inference,default-flags"
+  TARGET_BACKEND
+    "dylib-llvm-aot"
+  TARGET_ARCHITECTURE
+    "CPU-x86-64"
+  TRANSLATION_FLAGS
+    ${X86_64_CPU_TRANSLATION_FLAGS}
+  BENCHMARK_TOOL
+    iree-benchmark-module
+  DRIVER
+    "dylib"
+  RUNTIME_FLAGS
+    "--task_topology_group_count=4"
 )
 
 # CPU, Dylib-Sync, big/little-core, full-inference
