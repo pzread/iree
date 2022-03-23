@@ -91,6 +91,7 @@ def execute_cmd_and_get_output(args: Sequence[str],
 
 class PlatformType(Enum):
   ANDROID = "Android"
+  LINUX = "Linux"
 
 
 @dataclass
@@ -125,6 +126,8 @@ class DeviceInfo:
   def get_cpu_arch_revision(self) -> str:
     if self.cpu_abi == "arm64-v8a":
       return self.__get_arm_cpu_arch_revision()
+    elif self.cpu_abi == "x86-64":
+      return self.cpu_abi
     raise ValueError("Unrecognized CPU ABI; need to update the list")
 
   def to_json_object(self) -> Dict[str, Any]:
