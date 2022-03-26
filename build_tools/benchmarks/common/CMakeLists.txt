@@ -21,3 +21,10 @@ iree_py_test(
   SRCS
     "common_arguments_test.py"
 )
+
+iree_py_test(
+  NAME
+    benchmark_suite_test
+  SRCS
+    "benchmark_suite_test.py"
+)
