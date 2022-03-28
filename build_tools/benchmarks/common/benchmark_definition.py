@@ -11,6 +11,7 @@ shared between different stages of the same benchmark pipeline.
 """
 
 import json
+import os
 import subprocess
 
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from typing import Any, Dict, Sequence
 # A map from CPU ABI to IREE's benchmark target architecture.
 CPU_ABI_TO_TARGET_ARCH_MAP = {
     "arm64-v8a": "cpu-arm64-v8a",
+    "x86_64": "cpu-x86-64"
 }
 
 # A map from GPU name to IREE's benchmark target architecture.
@@ -30,6 +32,7 @@ GPU_NAME_TO_TARGET_ARCH_MAP = {
     "adreno-730": "gpu-adreno",
     "mali-g77": "gpu-mali-valhall",
     "mali-g78": "gpu-mali-valhall",
+    "unknown": "gpu-unknown",
 }
 
 
@@ -99,6 +102,21 @@ def execute_cmd_and_get_output(args: Sequence[str],
                      **kwargs).stdout.strip()
 
 
+def get_git_commit_hash(commit: str) -> str:
+  return execute_cmd_and_get_output(['git', 'rev-parse', commit],
+                                    cwd=os.path.dirname(
+                                        os.path.realpath(__file__)))
+
+
+def get_benchmark_repetition_count(runner: str) -> int:
+  """Returns the benchmark repetition count for the given runner."""
+  if runner == "iree-vmvx":
+    # VMVX is very unoptimized for now and can take a long time to run.
+    # Decrease the repetition for it until it's reasonably fast.
+    return 3
+  return 10
+
+
 class PlatformType(Enum):
   ANDROID = "Android"
   LINUX = "Linux"
@@ -150,6 +168,8 @@ class DeviceInfo:
   def get_cpu_arch_revision(self) -> str:
     if self.cpu_abi == "arm64-v8a":
       return self.__get_arm_cpu_arch_revision()
+    elif self.cpu_abi == "x86_64":
+      return "x86-64"
     raise ValueError("Unrecognized CPU ABI; need to update the list")
 
   def to_json_object(self) -> Dict[str, Any]:

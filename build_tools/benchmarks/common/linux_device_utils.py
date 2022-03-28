@@ -41,7 +41,8 @@ def get_linux_device_info(device_model: str = "Unknown",
   return DeviceInfo(
       PlatformType.LINUX,
       # Includes CPU model as it is the key factor of the device performance.
-      model=f"{device_model}({get_linux_cpu_model(verbose)})",
+      # Space is not allowed in the model name due to the way we parse it.
+      model=f"{device_model}({get_linux_cpu_model(verbose)})".replace(" ", "-"),
       # Currently we only have x86, so CPU ABI = CPU arch.
       cpu_abi=get_linux_cpu_arch(verbose),
       cpu_features=get_linux_cpu_features(verbose),

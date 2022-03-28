@@ -39,13 +39,12 @@ import time
 import shutil
 import sys
 
-from typing import List, Optional, Sequence, Tuple
-from common.benchmark_suite import BENCHMARK_RESULTS_REL_PATH, CAPTURES_REL_PATH, MODEL_FLAGFILE_NAME, BenchmarkCase, BenchmarkConfig, BenchmarkDriver, BenchmarkHelper
-
-from common.benchmark_definition import (DeviceInfo, BenchmarkInfo,
-                                         BenchmarkResults, BenchmarkRun,
-                                         execute_cmd,
-                                         execute_cmd_and_get_output)
+from typing import Optional, Sequence, Tuple
+from common.benchmark_suite import MODEL_FLAGFILE_NAME, BenchmarkCase, BenchmarkDriver
+from common.benchmark_definition import (execute_cmd,
+                                         execute_cmd_and_get_output,
+                                         get_benchmark_repetition_count,
+                                         get_git_commit_hash)
 from common.android_device_utils import (get_android_device_model,
                                          get_android_device_info,
                                          get_android_gpu_name)
@@ -56,21 +55,6 @@ ANDROID_TMP_DIR = "/data/local/tmp/iree-benchmarks"
 
 NORMAL_TOOL_REL_DIR = "normal-tools"
 TRACED_TOOL_REL_DIR = "traced-tools"
-
-
-def get_benchmark_repetition_count(runner: str) -> int:
-  """Returns the benchmark repetition count for the given runner."""
-  if runner == "iree-vmvx":
-    # VMVX is very unoptimized for now and can take a long time to run.
-    # Decrease the repetition for it until it's reasonably fast.
-    return 3
-  return 10
-
-
-def get_git_commit_hash(commit: str) -> str:
-  return execute_cmd_and_get_output(['git', 'rev-parse', commit],
-                                    cwd=os.path.dirname(
-                                        os.path.realpath(__file__)))
 
 
 def adb_push_to_tmp_dir(content: str,
