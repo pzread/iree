@@ -32,7 +32,6 @@ class BenchmarkConfigTest(unittest.TestCase):
 
   def test_build_from_args(self):
     args = build_common_argument_parser().parse_args([
-        f"--tmp_dir={self.tmp_dir.name}",
         f"--normal_benchmark_tool_dir={self.normal_tool_dir}",
         f"--traced_benchmark_tool_dir={self.traced_tool_dir}",
         f"--trace_capture_tool={self.trace_capture_tool.name}",
@@ -40,22 +39,21 @@ class BenchmarkConfigTest(unittest.TestCase):
         f"--model_name_regex=b", f"--mode_regex=c", f"--keep_going",
         f"--benchmark_min_time=10", self.build_dir.name
     ])
+    tmp_dir = self.tmp_dir.name
 
     config = BenchmarkConfig.build(args=args,
-                                   git_commit_hash="abcd",
+                                   tmp_dir=tmp_dir,
                                    skip_benchmarks={"1"},
                                    skip_captures={"2"})
 
-    per_commit_tmp_dir = os.path.join(self.tmp_dir.name, "abcd")
     self.assertEqual(
         config,
-        BenchmarkConfig(tmp_dir=per_commit_tmp_dir,
+        BenchmarkConfig(tmp_dir=tmp_dir,
                         root_benchmark_dir=os.path.join(self.build_dir.name,
                                                         "benchmark_suites"),
                         benchmark_results_dir=os.path.join(
-                            per_commit_tmp_dir, "benchmark-results"),
-                        capture_dir=os.path.join(per_commit_tmp_dir,
-                                                 "captures"),
+                            tmp_dir, "benchmark-results"),
+                        capture_dir=os.path.join(tmp_dir, "captures"),
                         normal_benchmark_tool_dir=self.normal_tool_dir,
                         traced_benchmark_tool_dir=self.traced_tool_dir,
                         trace_capture_tool=self.trace_capture_tool.name,
@@ -70,18 +68,16 @@ class BenchmarkConfigTest(unittest.TestCase):
 
   def test_build_from_args_benchmark_only(self):
     args = build_common_argument_parser().parse_args([
-        f"--tmp_dir={self.tmp_dir.name}",
         f"--normal_benchmark_tool_dir={self.normal_tool_dir}",
         self.build_dir.name
     ])
 
-    config = BenchmarkConfig.build(args=args, git_commit_hash="abcd")
+    config = BenchmarkConfig.build(args=args, tmp_dir=self.tmp_dir.name)
 
     self.assertFalse(config.do_capture)
 
   def test_build_from_args_invalid_capture_args(self):
     args = build_common_argument_parser().parse_args([
-        f"--tmp_dir={self.tmp_dir.name}",
         f"--normal_benchmark_tool_dir={self.normal_tool_dir}",
         f"--traced_benchmark_tool_dir={self.traced_tool_dir}",
         self.build_dir.name
@@ -89,7 +85,7 @@ class BenchmarkConfigTest(unittest.TestCase):
 
     self.assertRaises(
         ValueError,
-        lambda: BenchmarkConfig.build(args=args, git_commit_hash="abcd"))
+        lambda: BenchmarkConfig.build(args=args, tmp_dir=self.tmp_dir.name))
 
 
 class BenchmarkHelperTest(unittest.TestCase):

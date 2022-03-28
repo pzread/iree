@@ -31,9 +31,9 @@ CMake target, which put them in the following directory structure:
 
 from argparse import Namespace
 from dataclasses import dataclass, field
-from typing import Optional, Sequence, Set
-
-from .benchmark_definition import DeviceInfo, BenchmarkInfo
+import json
+from typing import Optional, Sequence, Set, Tuple
+from .benchmark_definition import BenchmarkResults, BenchmarkRun, DeviceInfo, BenchmarkInfo
 
 import os
 import re
@@ -101,7 +101,7 @@ class BenchmarkConfig:
 
   @staticmethod
   def build(args: Namespace,
-            git_commit_hash: str,
+            tmp_dir: str,
             skip_benchmarks: Set[str] = set(),
             skip_captures: Set[str] = set()):
     """Build config from command arguments and supplementary information."""
@@ -123,15 +123,11 @@ class BenchmarkConfig:
       )
 
     build_dir = os.path.realpath(args.build_dir)
-    per_commit_tmp_dir = os.path.realpath(
-        os.path.join(args.tmp_dir, git_commit_hash))
-
     return BenchmarkConfig(
-        tmp_dir=per_commit_tmp_dir,
+        tmp_dir=tmp_dir,
         root_benchmark_dir=os.path.join(build_dir, BENCHMARK_SUITE_REL_PATH),
-        benchmark_results_dir=os.path.join(per_commit_tmp_dir,
-                                           BENCHMARK_RESULTS_REL_PATH),
-        capture_dir=os.path.join(per_commit_tmp_dir, CAPTURES_REL_PATH),
+        benchmark_results_dir=os.path.join(tmp_dir, BENCHMARK_RESULTS_REL_PATH),
+        capture_dir=os.path.join(tmp_dir, CAPTURES_REL_PATH),
         normal_benchmark_tool_dir=real_path_or_none(
             args.normal_benchmark_tool_dir),
         traced_benchmark_tool_dir=real_path_or_none(
@@ -374,3 +370,124 @@ class BenchmarkHelper(object):
                          bench_mode=bench_mode.split(","),
                          runner=iree_driver,
                          device_info=self.device_info)
+
+
+class BenchmarkDriver(object):
+  """Abstract driver runs the whole benchmark flow."""
+
+  def __init__(self,
+               device_info: DeviceInfo,
+               config: BenchmarkConfig,
+               git_commit_hash: str,
+               previous_benchmark_filenames: Set[str],
+               previous_capture_filenames: Set[str],
+               verbose: bool = False):
+    self.device_info = device_info
+    self.config = config
+    self.git_commit_hash = git_commit_hash
+    self.benchmark_filenames = list(previous_benchmark_filenames)
+    self.capture_filenames = list(previous_capture_filenames)
+    self.benchmark_errors = []
+    self.verbose = verbose
+
+  def run_benchmarks_for_category(
+      self, benchmark_cases: Sequence[BenchmarkCase]
+  ) -> Sequence[Tuple[Optional[str], Optional[str], Optional[Exception]]]:
+    raise NotImplementedError("Should be override.")
+
+  def run(self):
+    os.makedirs(self.config.tmp_dir, exist_ok=True)
+
+    helper = BenchmarkHelper(self.config, self.device_info)
+
+    # Create directories on the host to store results and captures from each benchmark run.
+    os.makedirs(self.config.benchmark_results_dir, exist_ok=True)
+    if self.config.do_capture:
+      os.makedirs(self.config.capture_dir, exist_ok=True)
+
+    cpu_target_arch = self.device_info.get_iree_cpu_arch_name()
+    gpu_target_arch = self.device_info.get_iree_gpu_arch_name()
+    drivers = helper.get_available_drivers(self.verbose)
+
+    for category in helper.list_benchmark_categories():
+      benchmark_cases = helper.generate_benchmark_cases(category,
+                                                        cpu_target_arch,
+                                                        gpu_target_arch,
+                                                        drivers, self.verbose)
+      results = self.run_benchmarks_for_category(benchmark_cases)
+      for (benchmark_filename, capture_filename, error) in results:
+        if error:
+          self.benchmark_errors.append(error)
+          continue
+        if benchmark_filename:
+          self.benchmark_filenames.append(benchmark_filename)
+        if capture_filename:
+          self.capture_filenames.append(capture_filename)
+
+  def get_benchmark_results(self):
+    results = BenchmarkResults()
+    results.set_commit(self.git_commit_hash)
+    for b in self.benchmark_filenames:
+      with open(b) as f:
+        result_json_object = json.loads(f.read())
+      benchmark_info = BenchmarkInfo.from_device_info_and_name(
+          self.device_info,
+          os.path.splitext(os.path.basename(b))[0])
+      benchmark_run = BenchmarkRun(benchmark_info,
+                                   result_json_object["context"],
+                                   result_json_object["benchmarks"])
+      results.benchmarks.append(benchmark_run)
+
+    return results
+
+  def get_capture_filenames(self):
+    return self.capture_filenames
+
+  def get_errors(self):
+    return self.benchmark_errors
+
+  @classmethod
+  def build(cls,
+            args: Namespace,
+            device_info: DeviceInfo,
+            git_commit_hash: str,
+            verbose: bool = False):
+    previous_benchmark_filenames = set()
+    previous_capture_filenames = set()
+    # Collect names of previous benchmarks and captures that should be skipped and
+    # merged into the results.
+    if args.continue_from_directory is not None:
+      previous_benchmarks_dir = os.path.join(args.continue_from_directory,
+                                             BENCHMARK_RESULTS_REL_PATH)
+      if os.path.isdir(previous_benchmarks_dir):
+        previous_benchmark_filenames = set(
+            p for p in os.listdir(previous_benchmarks_dir)
+            if os.path.splitext(os.path.basename(p))[1] == ".json")
+
+      previous_captures_dir = os.path.join(args.continue_from_directory,
+                                           CAPTURES_REL_PATH)
+      if os.path.isdir(previous_captures_dir):
+        previous_capture_filenames = set(
+            p for p in os.listdir(previous_captures_dir)
+            if os.path.splitext(os.path.basename(p))[1] == ".tracy")
+
+    previous_benchmarks = set(
+        os.path.splitext(os.path.basename(p))[0]
+        for p in previous_benchmark_filenames)
+    previous_captures = set(
+        os.path.splitext(os.path.basename(p))[0]
+        for p in previous_capture_filenames)
+
+    per_commit_tmp_dir = os.path.realpath(
+        os.path.join(args.tmp_dir, git_commit_hash))
+    config = BenchmarkConfig.build(args=args,
+                                   tmp_dir=per_commit_tmp_dir,
+                                   skip_benchmarks=previous_benchmarks,
+                                   skip_captures=previous_captures)
+
+    return cls(device_info=device_info,
+               config=config,
+               git_commit_hash=git_commit_hash,
+               previous_benchmark_filenames=previous_benchmark_filenames,
+               previous_capture_filenames=previous_capture_filenames,
+               verbose=verbose)
