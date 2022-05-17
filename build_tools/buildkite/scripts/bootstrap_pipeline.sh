@@ -22,7 +22,8 @@ if [[ ${BUILDKITE_ORGANIZATION_SLUG} == "local" ]]; then
   exit 0
 fi
 
-if [[ "${PIPELINE_BOOTSTRAPPED}" == "false" ]]; then
+if [[ "${PIPELINE_BOOTSTRAPPED}" != "true" ]]; then
   export PIPELINE_BOOTSTRAPPED="true"
+  export CUSTOM_REF="$(git rev-parse HEAD)"
   buildkite-agent pipeline upload --replace $PIPELINE_FILE
 fi

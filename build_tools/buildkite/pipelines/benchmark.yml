@@ -1,0 +1,69 @@
+# Copyright 2022 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+# Note: this runs on "security: submitted" agents, since this pipeline itself is
+# submitted code and it fetches the scripts only from the main repository.
+
+env:
+  CUSTOM_REF: ${CUSTOM_REF}
+  PIPELINE_BOOTSTRAPPED: ${PIPELINE_BOOTSTRAPPED}
+
+steps:
+  - label: ":hiking_boot: Bootstrapping benchmark pipeline"
+    # If this PR is coming from the main repo we can use its configs. Otherwise
+    # we proceed with the configs from the main repo.
+    if: |
+      !build.pull_request.repository.fork &&
+      build.env("PIPELINE_BOOTSTRAPPED") != "true"
+    commands: |
+      ./build_tools/buildkite/scripts/bootstrap_pipeline.sh \
+          build_tools/buildkite/pipelines/benchmark.yml
+    agents:
+      - "queue=orchestration"
+      - "security=submitted"
+
+  - wait
+
+  - label: "Launch x86_64 benchmark pipeline"
+    plugins:
+      - https://github.com/GMNGeoffrey/smooth-checkout-buildkite-plugin#24e54e7729:
+          repos:
+            - config:
+                - url: ${BUILDKITE_REPO}
+                  ref: ${CUSTOM_REF:-main}
+    commands: |
+      git clean -fdx
+      export BUILDKITE_ACCESS_TOKEN="$(gcloud secrets versions access latest \
+          --secret=jerry-buildkite-presubmit-pipelines)"
+      ./build_tools/buildkite/scripts/wait_for_pipeline_success.py \
+          --output-build-json=build.json jerry-benchmark-x86-64
+      mkdir benchmark-results-x86_64
+      buildkite-agent artifact download "benchmark-results-*.json" \
+          benchmark-results-x86_64/ --build $(cat build.json)
+    artifact_paths:
+      - "benchmark-results-x86_64/*.json"
+    agents:
+      - "queue=orchestration"
+      - "security=submitted"
+
+  - wait
+
+  - label: ":lower_left_crayon: Comment benchmark results on pull request"
+    plugins:
+      - https://github.com/GMNGeoffrey/smooth-checkout-buildkite-plugin#24e54e7729:
+          repos:
+            - config:
+                - url: ${BUILDKITE_REPO}
+                  ref: ${CUSTOM_REF:-main}
+    commands: |
+      git clean -fdx
+      buildkite-agent artifact download "benchmark-results-*/*.json" .
+      ./build_tools/benchmarks/post_benchmarks_as_pr_comment.py \
+          --verbose --query-base \
+          benchmark-results-*/*.json"
+    key: "post-on-pr"
+    agents:
+      - "queue=report"
