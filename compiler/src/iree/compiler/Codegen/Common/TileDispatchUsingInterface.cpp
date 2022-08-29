@@ -20,6 +20,8 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/TilingInterface.h"
 
+#include <deque>
+
 #define DEBUG_TYPE "tile-dispatch-using-interface"
 
 namespace mlir {
@@ -241,6 +243,69 @@ struct TileDispatchUsingSCFForOp
   /// Filter to control transformation.
   linalg::LinalgTransformationFilter filter;
 };
+
+static Optional<OpResult> getFusableProducer(Value v) {
+  while (auto blockArg = v.dyn_cast<BlockArgument>()) {
+    auto loopOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp());
+    if (!loopOp)
+      return llvm::None;
+    v = loopOp.getOpOperandForRegionIterArg(blockArg).get();
+  }
+  if (!isa_and_nonnull<TilingInterface>(v.getDefiningOp()))
+    return llvm::None;
+  return v.cast<OpResult>();
+}
+
+static void recursiveFuse(
+    Operation *fusedOp,
+    PatternRewriter &rewriter,
+    llvm::SmallMapVector<Operation *, Operation *, 4> &tiledOpMap,
+    const TilingResult &tilingResult) {
+  for (Value operand : fusedOp->getOperands()) {
+    auto sliceOp = operand.getDefiningOp<tensor::ExtractSliceOp>();
+    if (!sliceOp)
+      continue;
+    Optional<OpResult> fusableProducer = getFusableProducer(sliceOp.getSource());
+    if (!fusableProducer)
+      continue;
+    OpResult fusableProducerResult = fusableProducer.value();
+
+    auto it = tiledOpMap.find(fusableProducerResult.getOwner());
+    if (it != tiledOpMap.end()) {
+      Value fusedProducerValue = it->second->getOpResult(fusableProducerResult.getResultNumber());
+      rewriter.replaceOp(sliceOp, fusedProducerValue);
+      continue;
+    }
+
+    rewriter.setInsertionPoint(fusedOp);
+    FailureOr<Value> fusedProducerValueOr =
+        tensor::replaceExtractSliceWithTiledProducer(rewriter, sliceOp,
+                                                    fusableProducerResult);
+    if (failed(fusedProducerValueOr))
+      continue;
+    Value fusedProducerValue = fusedProducerValueOr.value();
+
+    Operation *fusedProducer = fusedProducerValue.getDefiningOp();
+    tiledOpMap.insert({fusableProducerResult.getOwner(), fusedProducer});
+    rewriter.replaceOp(sliceOp, fusedProducerValue);
+
+    TilingInterface unfusedProducerOp =
+      cast<TilingInterface>(fusableProducerResult.getOwner());
+    scf::ForOp outerMostTiledLoop = tilingResult.loops.front();
+    SmallVector<Value> unfusedProducerOpDestValues =
+        unfusedProducerOp.getDestinationOperands(rewriter);
+    for (OpOperand &uses : unfusedProducerOp->getUses()) {
+      if (uses.getOwner() == outerMostTiledLoop.getOperation()) {
+        unsigned resultNumber = uses.get().cast<OpResult>().getResultNumber();
+        unsigned operandNumber = uses.getOperandNumber();
+        outerMostTiledLoop->setOperand(
+            operandNumber, unfusedProducerOpDestValues[resultNumber]);
+      }
+    }
+
+    recursiveFuse(fusedProducer, rewriter, tiledOpMap, tilingResult);
+  }
+}
 }  // namespace
 
 FailureOr<TilingResult> TileDispatchUsingSCFForOp::returningMatchAndRewrite(
@@ -428,6 +493,11 @@ FailureOr<TilingResult> TileDispatchUsingSCFForOp::returningMatchAndRewrite(
   for (auto storeOp : storeOps) {
     rewriter.eraseOp(storeOp);
   }
+
+  llvm::SmallMapVector<Operation *, Operation *, 4> tiledOpMap;
+  tiledOpMap.insert({op, tilingResult.tiledOp});
+  recursiveFuse(tilingResult.tiledOp, rewriter, tiledOpMap, tilingResult);
+  
   return tilingResult;
 }
 
@@ -532,8 +602,7 @@ void populateTileAndDistributeToWorkgroupsPatterns(
   patterns.insert<TileDispatchUsingSCFForOp>(context, std::move(options),
                                              std::move(filter));
   patterns.insert<SwapExtractSliceWithDispatchTensorLoad,
-                  SwapExtractSliceWithInitTensor,
-                  SwapExtractSliceWithTiledProducer>(context);
+                  SwapExtractSliceWithInitTensor>(context);
 }
 
 }  // namespace iree_compiler

@@ -541,6 +541,7 @@ static LogicalResult setDefaultRootConfig(
   tileSizes.emplace_back(std::move(flowTileSizes));
   auto loweringConfig = IREE::Codegen::LoweringConfigAttr::get(
       entryPointFn.getContext(), tileSizes);
+  llvm::dbgs() << "test" << partitionableLoopsInterfaceOp << "\n";
   setLoweringConfig(partitionableLoopsInterfaceOp, loweringConfig);
   return success();
 }

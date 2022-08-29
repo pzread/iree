@@ -16,6 +16,8 @@
 #include "iree/compiler/Codegen/Dialect/LoweringConfig.cpp.inc"
 #include "iree/compiler/Codegen/Dialect/LoweringConfigEnums.cpp.inc"
 
+#include "llvm/Support/Debug.h"
+
 static const char kConfigAttrName[] = "lowering_config";
 static const char kTranslationInfoAttrName[] = "translation_info";
 static const char kCompilationInfoAttrName[] = "compilation_info";
@@ -305,6 +307,7 @@ SmallVector<Value, 4> getTileSizes(OpBuilder &b, Operation *op,
 
 void setLoweringConfig(Operation *op,
                        IREE::Codegen::LoweringConfigAttr config) {
+  llvm::dbgs() << "lowerconfig" << op << "\n";
   op->setAttr(kConfigAttrName, config);
 }
 
