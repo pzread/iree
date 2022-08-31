@@ -28,7 +28,12 @@ class Linux_x86_64_Benchmarks(object):
   CASCADELAKE_COMPILE_CONFIG = iree_definitions.CompileConfig(
       id=unique_ids.IREE_COMPILE_CONFIG_LINUX_CASCADELAKE,
       tags=["default-flags"],
-      compile_targets=[CASCADELAKE_CPU_TARGET])
+      compile_targets=[CASCADELAKE_CPU_TARGET],
+      extra_flags=[
+          "--iree-flow-dump-dispatch-graph",
+          "--iree-flow-dump-dispatch-graph-output-file=@module.dot",
+          "--mlir-elide-elementsattrs-if-larger=8",
+      ])
 
   @classmethod
   def generate(
@@ -48,14 +53,14 @@ class Linux_x86_64_Benchmarks(object):
 
     # Generate run specs for mobile models.
     mobile_model_run_specs = []
-    for compile_spec, run_config in itertools.product(
-        mobile_model_compile_specs, default_run_configs):
-      mobile_model_run_specs.append(
-          iree_definitions.BenchmarkRunSpec(
-              compile_spec=compile_spec,
-              run_config=run_config,
-              target_device_spec=linux_x86_64_specs.GCP_C2_STANDARD_16,
-              input_data=common_definitions.RANDOM_MODEL_INPUT_DATA))
+    # for compile_spec, run_config in itertools.product(
+    #     mobile_model_compile_specs, default_run_configs):
+    #   mobile_model_run_specs.append(
+    #       iree_definitions.BenchmarkRunSpec(
+    #           compile_spec=compile_spec,
+    #           run_config=run_config,
+    #           target_device_spec=linux_x86_64_specs.GCP_C2_STANDARD_16,
+    #           input_data=common_definitions.RANDOM_MODEL_INPUT_DATA))
 
     return (mobile_model_compile_specs, mobile_model_run_specs)
 

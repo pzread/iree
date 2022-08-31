@@ -122,6 +122,7 @@ function(iree_bytecode_module)
     COMMAND
       ${_COMPILE_TOOL_EXECUTABLE}
       ${_ARGS}
+      2> ${_OUTPUT_FILES}.stderr
     # Changes to either the compiler tool or the input sources should rebuild.
     DEPENDS
       ${_COMPILE_TOOL_EXECUTABLE}

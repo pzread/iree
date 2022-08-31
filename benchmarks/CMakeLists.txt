@@ -1,1 +1,3 @@
-iree_add_all_subdirs()
+# ree_add_all_subdirs()
+
+include(tmp.cmake)

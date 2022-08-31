@@ -127,6 +127,7 @@ class IreeRuleFactory(object):
       model_id: str,
       model_name: str,
       model_source_type: common_definitions.ModelSourceType,
+      model_entry_function: str,
       source_model_rule: ModelRule,
   ) -> IreeModelImportRule:
     """Adds a rule to fetch the model and import into MLIR. Reuses the rule when
@@ -161,6 +162,7 @@ class IreeRuleFactory(object):
       cmake_rule = TF_IMPORT_CMAKE_TEMPLATE.substitute(
           __TARGET_NAME=target_name,
           __SOURCE_MODEL_PATH=source_model_rule.file_path,
+          __ENTRY_FUNCTION=model_entry_function,
           __OUTPUT_PATH=output_file_path)
       mlir_dialect_type = "mhlo"
     else:
@@ -194,6 +196,11 @@ class IreeRuleFactory(object):
 
     # Module path: <iree_artifacts_dir>/<model_id>_<model_name>/<compile_config_id>.vmfb
     output_path = f"{self._iree_artifacts_dir}/{model.id}_{model.name}/{compile_config.id}.vmfb"
+
+    compile_flags = [
+        flag.replace("@module",
+                     os.path.splitext(output_path)[0]) for flag in compile_flags
+    ]
 
     cmake_rule = IREE_BYTECODE_MODULE_CMAKE_TEMPLATE.substitute(
         __TARGET_NAME=target_name,
@@ -311,11 +318,13 @@ def _generate_iree_benchmark_rules(common_rule_factory: CommonRuleFactory,
         model_id=model.id,
         model_name=model.name,
         model_source_type=model.source_type,
+        model_entry_function=model.entry_function,
         source_model_rule=source_model_rule)
 
     compile_flags = _generate_iree_compile_flags(
         compile_config=compile_spec.compile_config,
-        mlir_dialect_type=import_rule.mlir_dialect_type)
+        mlir_dialect_type=import_rule.mlir_dialect_type
+    ) + compile_config.extra_flags
     compile_rule = iree_rule_factory.add_compile_module_rule(
         compile_spec=compile_spec,
         model_import_rule=import_rule,
