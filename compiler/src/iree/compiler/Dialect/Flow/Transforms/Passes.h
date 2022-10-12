@@ -145,7 +145,8 @@ std::unique_ptr<Pass> createVerifyInputLegalityPass();
 // DispatchRegionOps, then DispatchWorkgroupsOps.)
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createDispatchLinalgOnTensorsPass(bool aggressiveFusion = false,
-                                  bool generateWorkloadRegion = true);
+                                  bool generateWorkloadRegion = true,
+                                  bool testHeuristicOnly = false);
 
 // Pass to perform dispatch of Linalg on tensor ops by using the transform
 // dialect. Dispatch regions are created as specified by the transform module

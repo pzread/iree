@@ -228,13 +228,9 @@ static void buildWorkloadRegionBody(OpBuilder &builder, Location loc,
 
 /// Create Flow::DispatchGroupsOps based on a fusion heuristic.
 static FailureOr<SmallVector<Flow::DispatchWorkgroupsOp>> createFusionGroups(
-    TensorDimTrackingRewriter &rewriter, FunctionOpInterface funcOp,
-    DominanceInfo const &dominanceInfo, bool generateWorkloadRegion,
-    bool aggressiveFusion) {
-  // Decide fusion groups (heuristic).
-  FusionGroupMapping fusionGroups =
-      decideFusableLinalgOps(funcOp, dominanceInfo, aggressiveFusion);
-
+    TensorDimTrackingRewriter &rewriter, const FusionGroupMapping &fusionGroups,
+    FunctionOpInterface funcOp, DominanceInfo const &dominanceInfo,
+    bool generateWorkloadRegion) {
   // Create a DispatchRegionOp for every fusion group.
   OpBuilder::InsertionGuard g(rewriter);
   SmallVector<Flow::DispatchRegionOp> regionOps;
@@ -352,6 +348,19 @@ static FailureOr<SmallVector<Flow::DispatchWorkgroupsOp>> wrapInWorkgroupsOp(
   return result;
 }
 
+/// For testing/debugging only: Annotate the IR with the results of the fusion
+/// group heuristic.
+static void annotateFusionGroups(OpBuilder &b,
+                                 const FusionGroupMapping &fusionGroups) {
+  int64_t counter = 0;
+  for (const auto &it : fusionGroups) {
+    it.first->setAttr("fusion_root", b.getI64IntegerAttr(counter));
+    for (Operation *op : it.second)
+      op->setAttr("fusion_group", b.getI64IntegerAttr(counter));
+    ++counter;
+  }
+}
+
 namespace {
 /// Pass declaration.
 struct DispatchLinalgOnTensorsPass
@@ -362,19 +371,18 @@ struct DispatchLinalgOnTensorsPass
                 scf::SCFDialect, tensor::TensorDialect>();
   }
   DispatchLinalgOnTensorsPass(bool aggressiveFusion,
-                              bool generateWorkloadRegion) {
+                              bool generateWorkloadRegion,
+                              bool testHeuristicOnly) {
     this->generateWorkloadRegion = generateWorkloadRegion;
     this->aggressiveFusion = aggressiveFusion;
+    this->testHeuristicOnly = testHeuristicOnly;
   }
   DispatchLinalgOnTensorsPass(const DispatchLinalgOnTensorsPass &pass) {
     this->generateWorkloadRegion = pass.generateWorkloadRegion;
     this->aggressiveFusion = pass.aggressiveFusion;
+    this->testHeuristicOnly = pass.testHeuristicOnly;
   }
   void runOnOperation() override;
-
- private:
-  bool aggressiveFusion = false;
-  bool generateWorkloadRegion = true;
 };
 }  // namespace
 
@@ -385,10 +393,17 @@ void DispatchLinalgOnTensorsPass::runOnOperation() {
   DominanceInfo const &dominanceInfo = getAnalysis<DominanceInfo>();
   TensorDimTrackingRewriter rewriter(funcOp);
 
+  // Step 0: Decide fusion groups (heuristic).
+  FusionGroupMapping fusionGroups =
+      decideFusableLinalgOps(funcOp, dominanceInfo, aggressiveFusion);
+  if (testHeuristicOnly) {
+    annotateFusionGroups(rewriter, fusionGroups);
+    return;
+  }
+
   // Step 1: Create a DispatchWorkgroupsOp for every fusion group.
-  auto maybeWorkgroupsOps =
-      createFusionGroups(rewriter, funcOp, dominanceInfo,
-                         generateWorkloadRegion, aggressiveFusion);
+  auto maybeWorkgroupsOps = createFusionGroups(
+      rewriter, fusionGroups, funcOp, dominanceInfo, generateWorkloadRegion);
   if (failed(maybeWorkgroupsOps)) return signalPassFailure();
   SmallVector<Flow::DispatchWorkgroupsOp> workgroupsOps = *maybeWorkgroupsOps;
 
@@ -437,7 +452,8 @@ void DispatchLinalgOnTensorsPass::runOnOperation() {
 
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 Flow::createDispatchLinalgOnTensorsPass(bool aggressiveFusion,
-                                        bool generateWorkloadRegion) {
-  return std::make_unique<DispatchLinalgOnTensorsPass>(aggressiveFusion,
-                                                       generateWorkloadRegion);
+                                        bool generateWorkloadRegion,
+                                        bool testHeuristicOnly) {
+  return std::make_unique<DispatchLinalgOnTensorsPass>(
+      aggressiveFusion, generateWorkloadRegion, testHeuristicOnly);
 }

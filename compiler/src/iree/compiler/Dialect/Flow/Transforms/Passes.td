@@ -69,6 +69,10 @@ def DispatchLinalgOnTensors :
   let options = [
     Option<"aggressiveFusion", "aggressive-fusion", "bool",
            /*default=*/"false", "Fuse with aggressive heuristics">,
+    Option<"generateWorkloadRegion", "generate-workload-region", "bool",
+           /*default=*/"true", "Generate the workload region of WorkgroupsOps">,
+    Option<"testHeuristicOnly", "test-heuristic-only", "bool",
+           /*default=*/"false", "Annotate the IR with heuristic results">,
   ];
 }
 
