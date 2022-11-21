@@ -28,11 +28,30 @@ from common.common_arguments import build_common_argument_parser
 from common.linux_device_utils import get_linux_device_info
 
 
+def _copy_to_remote(local_path: pathlib.PurePath,
+                    remote_host: str,
+                    remote_path: pathlib.PurePath,
+                    verbose: bool = False):
+  execute_cmd(["scp", f"{local_path}", f"{remote_host}:{remote_path}"],
+              verbose=verbose)
+
+
+def _copy_to_local(local_path: pathlib.PurePath,
+                   remote_host: str,
+                   remote_path: pathlib.PurePath,
+                   verbose: bool = False):
+  execute_cmd(["scp", f"{remote_host}:{remote_path}", f"{local_path}"],
+              verbose=verbose)
+
+
 class LinuxBenchmarkDriver(BenchmarkDriver):
   """Linux benchmark driver."""
 
-  def __init__(self, gpu_id: str, *args, **kwargs):
+  def __init__(self, gpu_id: str, remote_host: Optional[str],
+               remote_tmp_dir: pathlib.PurePath, *args, **kwargs):
     self.gpu_id = gpu_id
+    self.remote_host = remote_host
+    self.remote_tmp_dir = remote_tmp_dir
     super().__init__(*args, **kwargs)
 
   def run_benchmark_case(self, benchmark_case: BenchmarkCase,
@@ -54,11 +73,34 @@ class LinuxBenchmarkDriver(BenchmarkDriver):
           filter(lambda flag: not flag.startswith("--device"), run_flags))
       run_flags.append(f"--device=cuda://{self.gpu_id}")
 
+    cmd_wrapper = []
+    if self.remote_host is not None:
+      flag_index = None
+      for index, flag in enumerate(run_flags):
+        if flag.startswith("--module_file"):
+          flag_index = index
+          break
+      if flag_index is None:
+        raise ValueError("Module file flag not found in {run_flags}.")
+
+      module_file_path = pathlib.Path(benchmark_case.benchmark_case_dir
+                                     ) / run_flags[flag_index].split("=")[1]
+      remote_module_file_path = self.remote_tmp_dir / module_file_path.name
+      _copy_to_remote(local_path=module_file_path,
+                      remote_host=self.remote_host,
+                      remote_path=remote_module_file_path)
+      run_flags[flag_index] = f"--module_file={remote_module_file_path}"
+
+      cmd_wrapper += ["ssh", self.remote_host]
+
+    cmd_wrapper += ["taskset", taskset]
+
     if benchmark_results_filename:
-      self.__run_benchmark(benchmark_case=benchmark_case,
-                           results_filename=benchmark_results_filename,
-                           taskset=taskset,
-                           run_flags=run_flags)
+      self.__run_benchmark(
+          benchmark_case=benchmark_case,
+          results_filename=pathlib.PurePath(benchmark_results_filename),
+          cmd_wrapper=cmd_wrapper,
+          run_flags=run_flags)
 
     if capture_filename:
       self.__run_capture(benchmark_case=benchmark_case,
@@ -71,15 +113,24 @@ class LinuxBenchmarkDriver(BenchmarkDriver):
       return [line.strip() for line in flagfile.readlines()]
 
   def __run_benchmark(self, benchmark_case: BenchmarkCase,
-                      results_filename: str, taskset: str,
-                      run_flags: List[str]):
+                      results_filename: pathlib.PurePath,
+                      cmd_wrapper: List[str], run_flags: List[str]):
     tool_name = benchmark_case.benchmark_tool_name
-    tool_path = os.path.join(self.config.normal_benchmark_tool_dir, tool_name)
-    cmd = ["taskset", taskset, tool_path] + run_flags
+    if self.remote_host is None:
+      if self.config.normal_benchmark_tool_dir is None:
+        raise ValueError("normal_benchmark_tool_dir can't be None.")
+      tool_path = pathlib.PurePath(
+          self.config.normal_benchmark_tool_dir) / tool_name
+      tmp_results_filename = results_filename
+    else:
+      tool_path = self.remote_tmp_dir / tool_name
+      tmp_results_filename = self.remote_tmp_dir / results_filename.name
+
+    cmd = cmd_wrapper + [str(tool_path)] + run_flags
     if tool_name == "iree-benchmark-module":
       cmd.extend(
           get_iree_benchmark_module_arguments(
-              results_filename=results_filename,
+              results_filename=f'"{tmp_results_filename}"',
               driver_info=benchmark_case.driver_info,
               benchmark_min_time=self.config.benchmark_min_time))
 
@@ -87,6 +138,12 @@ class LinuxBenchmarkDriver(BenchmarkDriver):
         cmd, cwd=benchmark_case.benchmark_case_dir, verbose=self.verbose)
     if self.verbose:
       print(result_json)
+
+    if self.remote_host is not None:
+      _copy_to_local(local_path=results_filename,
+                     remote_host=self.remote_host,
+                     remote_path=tmp_results_filename,
+                     verbose=self.verbose)
 
   def __run_capture(self, benchmark_case: BenchmarkCase, capture_filename: str,
                     taskset: str, run_flags: List[str]):
@@ -120,11 +177,32 @@ def main(args):
   benchmark_config = BenchmarkConfig.build_from_args(args, commit)
   benchmark_suite = BenchmarkSuite.load_from_benchmark_suite_dir(
       benchmark_config.root_benchmark_dir)
+
+  remote_tmp_dir = pathlib.PurePath("/tmp/iree-remote-benchmarks")
+  remote_host = args.remote_host
+  if remote_host is not None:
+    try:
+      execute_cmd(["ssh", remote_host, "rm", "-r", f"{remote_tmp_dir}"])
+    except subprocess.CalledProcessError:
+      pass
+    execute_cmd(["ssh", remote_host, "mkdir", f"{remote_tmp_dir}"])
+
+    if benchmark_config.normal_benchmark_tool_dir is not None:
+      tool_name = "iree-benchmark-module"
+      tool_path = pathlib.Path(
+          benchmark_config.normal_benchmark_tool_dir) / tool_name
+      _copy_to_remote(local_path=tool_path,
+                      remote_host=remote_host,
+                      remote_path=remote_tmp_dir / tool_name,
+                      verbose=args.verbose)
+
   benchmark_driver = LinuxBenchmarkDriver(gpu_id=args.gpu_id,
                                           device_info=device_info,
                                           benchmark_config=benchmark_config,
                                           benchmark_suite=benchmark_suite,
                                           benchmark_grace_time=1.0,
+                                          remote_host=remote_host,
+                                          remote_tmp_dir=remote_tmp_dir,
                                           verbose=args.verbose)
 
   if args.pin_cpu_freq:
@@ -171,6 +249,7 @@ def parse_argument():
       type=str,
       default="0",
       help="GPU ID to run the benchmark, e.g., '0' or 'GPU-<UUID>'")
+  arg_parser.add_argument("--remote_host", default=None, help="TODO")
 
   return arg_parser.parse_args()
 
