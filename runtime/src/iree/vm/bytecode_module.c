@@ -146,6 +146,7 @@ IREE_API_EXPORT iree_status_t iree_vm_bytecode_module_parse_header(
         (iree_host_size_t)(flatbuffer_contents.data - archive_contents.data) +
             length_prefix,
         IREE_VM_ARCHIVE_SEGMENT_ALIGNMENT);
+    // #UNSAFE(rodata_offset can run over the buffer size)
     *out_rodata_offset = rodata_offset;
   }
   return iree_ok_status();
@@ -291,6 +292,7 @@ static iree_status_t iree_vm_bytecode_module_flatbuffer_verify(
         iree_vm_RodataSegmentDef_external_data_offset(segment);
     uint64_t segment_length =
         iree_vm_RodataSegmentDef_external_data_length(segment);
+    // #UNSAFE(interger overflow)
     uint64_t segment_end =
         archive_rodata_offset + segment_offset + segment_length;
     if (segment_end > archive_contents.data_length) {
@@ -384,6 +386,8 @@ static iree_status_t iree_vm_bytecode_module_flatbuffer_verify(
        i < iree_vm_FunctionDescriptor_vec_len(function_descriptors); ++i) {
     iree_vm_FunctionDescriptor_struct_t function_descriptor =
         iree_vm_FunctionDescriptor_vec_at(function_descriptors, i);
+    // #UNSAFE(function_descriptor->bytecode_length can be negative)
+    // #UNSAFE(offset + length can overflow int32_t)
     if (function_descriptor->bytecode_offset < 0 ||
         function_descriptor->bytecode_offset +
                 function_descriptor->bytecode_length >
@@ -394,6 +398,7 @@ static iree_status_t iree_vm_bytecode_module_flatbuffer_verify(
           i, function_descriptor->bytecode_offset,
           flatbuffers_uint8_vec_len(bytecode_data));
     }
+    // #UNSAFE(reigster_count is signed interger, can be negative)
     if (function_descriptor->i32_register_count > IREE_I32_REGISTER_COUNT ||
         function_descriptor->ref_register_count > IREE_REF_REGISTER_COUNT) {
       return iree_make_status(
