@@ -79,6 +79,8 @@ cmake_dependent_option(IREE_ENABLE_COMPILATION_BENCHMARKS "Builds IREE benchmark
 
 option(IREE_BUILD_MICROBENCHMARKS "Builds IREE microbenchmark suites." OFF)
 
+option(IREE_ENABLE_E2E_MODEL_TESTS "Enable e2e model tests." OFF)
+
 #-------------------------------------------------------------------------------
 # Experimental project flags
 #-------------------------------------------------------------------------------
@@ -309,6 +311,16 @@ if(IREE_ENABLE_CCACHE)
 endif()
 
 option(IREE_DEV_MODE "Configure settings to optimize for IREE development (as opposed to CI or release)" OFF)
+
+#-------------------------------------------------------------------------------
+# IREE E2E model tests
+#-------------------------------------------------------------------------------
+
+if(IREE_ENABLE_E2E_MODEL_TESTS)
+  if(NOT DEFINED IREE_E2E_TEST_ARTIFACTS_DIR)
+
+  endif()
+endif()
 
 #-------------------------------------------------------------------------------
 # IREE assertions
