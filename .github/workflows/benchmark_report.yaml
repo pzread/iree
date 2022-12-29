@@ -24,4 +24,4 @@ jobs:
     steps:
       - name: "Dummy"
         run: |
-          echo "${{ context.payload.workflow_run }}"
+          echo "${{ github.event.workflow_run }}"
