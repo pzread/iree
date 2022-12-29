@@ -11,7 +11,7 @@ on:
   pull_request:
   push:
     branches:
-      - bench-priv-workflow
+      - main
 
 concurrency:
   # A PR number if a pull request and otherwise the commit hash. This cancels
