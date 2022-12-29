@@ -23,7 +23,7 @@ concurrency:
 jobs:
   setup:
     runs-on: ubuntu-20.04
-  steps:
-    - name: "Dummy"
-      run: |
-        true
+    steps:
+      - name: "Dummy"
+        run: |
+          true
