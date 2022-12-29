@@ -59,6 +59,7 @@ env:
 jobs:
   setup:
     runs-on: ubuntu-20.04
+    if: false
     env:
       # The commit being checked out is the merge commit for the PR. Its first
       # parent will be the tip of main.
@@ -1145,7 +1146,7 @@ jobs:
   summary:
     # Even if you have an explicit if condition, you still need to override
     # GitHub's default behavior of not running if any dependencies failed.
-    if: always()
+    if: false
     runs-on: ubuntu-20.04
     needs:
       - setup
