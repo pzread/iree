@@ -1,0 +1,25 @@
+# Copyright 2022 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+name: Benchmark Report
+
+on:
+  workflow_run:
+
+concurrency:
+  # A PR number if a pull request and otherwise the commit hash. This cancels
+  # queued and in-progress runs for the same PR (presubmit) or commit
+  # (postsubmit).
+  group: ${{ github.event.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  process_benchmark_results:
+    needs: [setup, compilation_benchmarks, execution_benchmarks]
+    # TODO(#11076): Temporarily disabled until we migrate the database.
+    # execution_benchmarks is the optional dependency and skipped in presubmit
+    # if no benchmark is specified to run.
+    if: |
