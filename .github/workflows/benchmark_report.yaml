@@ -24,4 +24,4 @@ jobs:
     steps:
       - name: "Dummy"
         run: |
-          true
+          echo "${{ context.payload.workflow_run }}"
