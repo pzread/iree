@@ -21,7 +21,11 @@ concurrency:
 jobs:
   process_benchmark_results:
     runs-on: ubuntu-20.04
+    if: github.event.workflow_run.conclusion == 'success'
+    env:
+      CI_GCS_DIR: gs://iree-github-actions-${{ github.event.workflow_run.event == 'pull_request' && 'presubmit' || 'postsubmit' }}-artifacts/${{ github.event.workflow_run.id }}/${{ github.event.workflow_run.run_attempt }}
     steps:
       - name: "Dummy"
         run: |
+          echo "${CI_GCS_DIR}"
           echo "${{ toJSON(github.event.workflow_run) }}"
