@@ -8,6 +8,8 @@ name: Benchmark Report
 
 on:
   workflow_run:
+    workflows: ["Test"]
+    types: [completed]
 
 concurrency:
   # A PR number if a pull request and otherwise the commit hash. This cancels
@@ -18,8 +20,8 @@ concurrency:
 
 jobs:
   process_benchmark_results:
-    needs: [setup, compilation_benchmarks, execution_benchmarks]
-    # TODO(#11076): Temporarily disabled until we migrate the database.
-    # execution_benchmarks is the optional dependency and skipped in presubmit
-    # if no benchmark is specified to run.
-    if: |
+    runs-on: ubuntu-20.04
+    steps:
+      - name: "Dummy"
+        run: |
+          true
