@@ -24,8 +24,10 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success'
     env:
       CI_GCS_DIR: gs://iree-github-actions-${{ github.event.workflow_run.event == 'pull_request' && 'presubmit' || 'postsubmit' }}-artifacts/${{ github.event.workflow_run.id }}/${{ github.event.workflow_run.run_attempt }}
+      BENCHMARK_RESULTS_METADATA: benchmark-results-metadata.json
     steps:
       - name: "Dummy"
         run: |
           echo "${CI_GCS_DIR}"
+          gcloud alpha storage cp "${CI_GCS_DIR}/${BENCHMARK_RESULTS_METADATA}" "${BENCHMARK_RESULTS_METADATA}"
           echo "${{ toJSON(github.event.workflow_run) }}"
