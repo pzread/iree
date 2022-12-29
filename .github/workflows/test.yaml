@@ -1,0 +1,69 @@
+# Copyright 2022 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+name: Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+concurrency:
+  # Version 2
+  # A PR number if a pull request and otherwise the commit hash. This cancels
+  # queued and in-progress runs for the same PR (presubmit) or commit
+  # (postsubmit).
+  group: ${{ github.event.number || github.sha }}-test
+  cancel-in-progress: true
+
+env:
+  # This needs to be in env instead of the outputs of setup because it contains
+  # the run attempt and we want that to be the current attempt, not whatever
+  # attempt the setup step last ran in.
+  GCS_DIR: gs://iree-github-actions-${{ github.event_name == 'pull_request' && 'presubmit' || 'postsubmit' }}-artifacts/${{ github.run_id }}/${{ github.run_attempt }}
+
+jobs:
+  setup:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: "Checking out repository"
+        uses: actions/checkout@7884fcad6b5d53d10323aee724dc68d8b9096a2e # v2
+        with:
+          fetch-depth: 0
+      - name: "Install"
+        run: |
+          pip install markdown_strings
+      - name: "Getting PR base commit"
+        id: get-base
+        run: |
+          git merge-base "origin/${GITHUB_BASE_REF}" "${GITHUB_SHA}" > pr-base-commit
+          export BASE_COMMIT="$(cat pr-base-commit)"
+          echo "Found ${BASE_COMMIT} as the PR base commit."
+          echo "pr-base-commit=${BASE_COMMIT}" >> "${GITHUB_OUTPUT}"
+      - name: "Generating benchmark comment"
+        id: generate
+        env:
+          IREE_DASHBOARD_URL: https://perf.iree.dev
+          IREE_BUILD_URL: https://github.com/iree-org/iree/actions/runs/
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_COMMIT: ${{ steps.get-base.outputs.pr-base-commit }}
+          BENCHMARK_COMMENT_ARTIFACT: benchmark-comment.json
+        run: |
+          sed -i "s/562b08f4b789bc7f14e48c125c75f6cc31fed31e/${GITHUB_SHA}/" \
+            ./c2-standard-16-benchmark-results.json
+          ./build_tools/benchmarks/generate_benchmark_comment.py \
+            --verbose \
+            --pr_commit="${GITHUB_SHA}" \
+            --pr_number="${PR_NUMBER}" \
+            --pr_base_commit="${PR_BASE_COMMIT}" \
+            --build_url="${IREE_BUILD_URL}" \
+            --benchmark_files="./c2-standard-16-benchmark-results.json" \
+            --output="${BENCHMARK_COMMENT_ARTIFACT}"
+          echo "benchmark-comment-artifact=${BENCHMARK_COMMENT_ARTIFACT}" >> "${GITHUB_OUTPUT}"
+      - name: Uploading benchmark comment artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-comment-artifact-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.generate.outputs.benchmark-comment-artifact }}
