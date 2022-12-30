@@ -30,6 +30,9 @@ jobs:
     steps:
       - name: "Dummy"
         run: |
+          echo "${GITHUB_SHA}"
+          echo "${GITHUB_BASE_REF}"
+          cat "${GITHUB_EVENT_PATH}"
           echo "${{ toJSON(github.event.workflow_run) }}"
 
   get_metadata:
