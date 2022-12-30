@@ -11,6 +11,7 @@ on:
   pull_request:
 
 concurrency:
+  # Version 1
   # A PR number if a pull request and otherwise the commit hash. This cancels
   # queued and in-progress runs for the same PR (presubmit) or commit
   # (postsubmit).
