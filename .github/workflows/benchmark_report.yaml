@@ -15,19 +15,109 @@ concurrency:
   # A PR number if a pull request and otherwise the commit hash. This cancels
   # queued and in-progress runs for the same PR (presubmit) or commit
   # (postsubmit).
-  group: ${{ github.event.number || github.sha }}-report
+  group: ${{ github.event.number || github.sha }}-benchmark-report
   cancel-in-progress: true
 
+env:
+  CI_STAGE: ${{ github.event.workflow_run.event == 'pull_request' && 'presubmit' || 'postsubmit' }}
+  CI_RUN_ID: ${{ github.event.workflow_run.id }}
+  CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+
 jobs:
-  process_benchmark_results:
-    runs-on: ubuntu-20.04
+  test:
     if: github.event.workflow_run.conclusion == 'success'
     env:
-      CI_GCS_DIR: gs://iree-github-actions-${{ github.event.workflow_run.event == 'pull_request' && 'presubmit' || 'postsubmit' }}-artifacts/${{ github.event.workflow_run.id }}/${{ github.event.workflow_run.run_attempt }}
-      BENCHMARK_RESULTS_METADATA: benchmark-results-metadata.json
     steps:
       - name: "Dummy"
         run: |
-          echo "${CI_GCS_DIR}"
-          gcloud alpha storage cp "${CI_GCS_DIR}/${BENCHMARK_RESULTS_METADATA}" "${BENCHMARK_RESULTS_METADATA}"
           echo "${{ toJSON(github.event.workflow_run) }}"
+
+  get_metadata:
+    # TODO(#11076): Temporarily disabled until we migrate the database.
+    # execution_benchmarks is the optional dependency and skipped in presubmit
+    # if no benchmark is specified to run.
+    if: true
+    runs-on: ubuntu-20.04
+    outputs:
+      status: steps.download.outputs.status
+      compile-stats-results: steps.extract.outputs.compile-stats-results
+      compile-stats-results-gcs-artifact: steps.extract.compile-stats-results-gcs-artifact
+      execution-benchmark-results-dir: steps.extract.outputs.execution-benchmark-results-dir
+      execution-benchmark-results-gcs-artifact-dir: steps.extract.outputs.execution-benchmark-results-gcs-artifact-dir
+    env:
+      BENCHMARK_RESULTS_METADATA: benchmark-results-metadata.json
+    steps:
+      - name: "Downloading metadata"
+        id: download
+        env:
+          CI_GCS_DIR: gs://iree-github-actions-${{ env.CI_STAGE }}-artifacts/${{ env.CI_RUN_ID }}/${{ env.CI_RUN_ATTEMPT }}
+        run: |
+          gcloud alpha storage cp \
+            "${CI_GCS_DIR}/${BENCHMARK_RESULTS_METADATA}" \
+            "${BENCHMARK_RESULTS_METADATA}" || export DOWNLOAD_STATUS="failed"
+          echo "status=${DOWNLOAD_STATUS:-success}" >> "${GITHUB_OUTPUT}"
+      - name: "Extracting metadata"
+        id: extract
+        if: steps.download.outputs.status == 'success'
+        run: |
+          echo "compile-stats-results=$(jq --raw-output '.compile-stats-results' ${BENCHMARK_RESULTS_METADATA})" >> "${GITHUB_OUTPUT}"
+          echo "compile-stats-results-gcs-artifact=$(jq --raw-output '.compile-stats-results-gcs-artifact' ${BENCHMARK_RESULTS_METADATA})" >> "${GITHUB_OUTPUT}"
+          echo "execution-benchmark-results-dir=$(jq --raw-output '.execution-benchmark-results-dir' ${BENCHMARK_RESULTS_METADATA})" >> "${GITHUB_OUTPUT}"
+          echo "execution-benchmark-results-gcs-artifact-dir=$(jq --raw-output '.execution-benchmark-results-gcs-artifact-dir' ${BENCHMARK_RESULTS_METADATA})" >> "${GITHUB_OUTPUT}"
+
+  process_benchmark_results:
+    needs: get_metadata
+    if: needs.get_metadata.outputs.status == 'success'
+    runs-on: ubuntu-20.04
+    # runs-on:
+    #   - self-hosted  # must come first
+    #   - runner-group=${{ needs.setup.outputs.runner-group }}
+    #   - environment=${{ needs.setup.outputs.runner-env }}
+    #   - cpu
+    #   - os-family=Linux
+    env:
+    steps:
+      - name: "Checking out repository"
+        uses: actions/checkout@7884fcad6b5d53d10323aee724dc68d8b9096a2e # v2
+      - name: Downloading compilation benchmark results
+        env:
+          COMPILE_STATS_RESULTS: ${{ needs.get_metadata.outputs.compile-stats-results }}
+          COMPILE_STATS_RESULTS_GCS_ARTIFACT: ${{ needs.get_metadata.outputs.compile-stats-results-gcs-artifact }}
+        run: |
+          gcloud alpha storage cp \
+            "${COMPILE_STATS_RESULTS_GCS_ARTIFACT}" \
+            "${COMPILE_STATS_RESULTS}"
+      - name: Downloading execution benchmark results
+        id: download-execution-results
+        if: needs.get_metadata.outputs.execution-benchmark-results-dir != 'null'
+        env:
+          EXECUTION_BENCHMARK_RESULTS_DIR: ${{ needs.get_metadata.outputs.execution-benchmark-results-dir }}
+          EXECUTION_BENCHMARK_RESULTS_GCS_ARTIFACT_DIR: ${{ needs.get_metadata.outputs.execution-benchmark-results-gcs-artifact-dir }}
+        run: |
+          gcloud alpha storage cp -r \
+            "${EXECUTION_BENCHMARK_RESULTS_GCS_ARTIFACT_DIR}/benchmark-results-*.json" \
+            "${EXECUTION_BENCHMARK_RESULTS_DIR}"
+          echo "execution-benchmark-results-pattern=${EXECUTION_BENCHMARK_RESULTS_DIR}/benchmark-results-*.json" >> "${GITHUB_OUTPUT}"
+      - name: Posting comments
+        if: env.CI_STAGE == 'presubmit'
+        env:
+          COMPILE_STATS_RESULTS: ${{ needs.get_metadata.outputs.compile-stats-results }}
+          # Wildcard pattern to match all execution benchmark results. Empty if
+          # execution_benchmarks is skipped, which results in no match.
+          EXECUTION_BENCHMARK_RESULTS_PATTERN: ${{ steps.download-execution-results.outputs.execution-benchmark-results-pattern }}
+          IREE_DASHBOARD_URL: https://perf.iree.dev
+          IREE_BUILD_URL: https://github.com/iree-org/iree/actions/runs/${{ env.CI_RUN_ID }}/attempts/${{ env.CI_RUN_ATTEMPT }}
+        run: |
+          build_tools/github_actions/docker_run.sh \
+            --env "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" \
+            --env "GIST_BOT_TOKEN=TODO" \
+            --env "IREE_DASHBOARD_URL=${IREE_DASHBOARD_URL}" \
+            gcr.io/iree-oss/benchmark-report@sha256:7498c6f32f63f13faf085463cc38656d4297519c824e63e1c99c8c258147f6ff \
+            ./build_tools/benchmarks/post_benchmarks_as_pr_comment.py \
+              --verbose \
+              --pr_commit="${GITHUB_SHA}" \
+              --pr_number="$(jq --raw-output .pull_request.number ${GITHUB_EVENT_PATH})" \
+              --pr_base_branch="${GITHUB_BASE_REF}" \
+              --build_url="${IREE_BUILD_URL}" \
+              --benchmark_files="${EXECUTION_BENCHMARK_RESULTS_PATTERN}" \
+              --compile_stats_files="${COMPILE_STATS_RESULTS}"
