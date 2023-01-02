@@ -24,17 +24,6 @@ env:
   CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
 
 jobs:
-  test:
-    if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-20.04
-    steps:
-      - name: "Dummy"
-        run: |
-          echo "${GITHUB_SHA}"
-          echo "${GITHUB_BASE_REF}"
-          cat "${GITHUB_EVENT_PATH}"
-          echo "${{ toJSON(github.event.workflow_run) }}"
-
   get_metadata:
     # TODO(#11076): Temporarily disabled until we migrate the database.
     # execution_benchmarks is the optional dependency and skipped in presubmit
@@ -55,9 +44,18 @@ jobs:
         env:
           CI_GCS_DIR: gs://iree-github-actions-${{ env.CI_STAGE }}-artifacts/${{ env.CI_RUN_ID }}/${{ env.CI_RUN_ATTEMPT }}
         run: |
-          gcloud alpha storage cp \
-            "${CI_GCS_DIR}/${BENCHMARK_RESULTS_METADATA}" \
-            "${BENCHMARK_RESULTS_METADATA}" || export DOWNLOAD_STATUS="failed"
+          # gcloud alpha storage cp \
+          #   "${CI_GCS_DIR}/${BENCHMARK_RESULTS_METADATA}" \
+          #   "${BENCHMARK_RESULTS_METADATA}" || export DOWNLOAD_STATUS="failed"
+          curl 'https://api.github.com/repos/pzread/iree/actions/runs/${CI_RUN_ID}/artifacts' | \
+            jq --raw-output '.artifacts[0].archive_download_url' > url.txt
+          curl \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}"\
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -o artifact.zip
+            $(cat url.txt)
+          unzip artifact.zip
           echo "status=${DOWNLOAD_STATUS:-success}" >> "${GITHUB_OUTPUT}"
       - name: "Extracting metadata"
         id: extract
