@@ -28,6 +28,11 @@ jobs:
   setup:
     runs-on: ubuntu-20.04
     steps:
+      - name: "Checking out repository"
+        uses: actions/checkout@7884fcad6b5d53d10323aee724dc68d8b9096a2e # v2
+      - name: "Install"
+        run: |
+          pip install markdown_strings
       - name: "Dummy"
         run: |
           echo "${GCS_DIR}"
