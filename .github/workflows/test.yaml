@@ -34,5 +34,15 @@ jobs:
         run: |
           pip install markdown_strings
       - name: "Dummy"
+        env:
+          IREE_DASHBOARD_URL: www.example.com
+          IREE_BUILD_URL: https://github.com/iree-org/iree/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          PR_NUMBER: ${{ github.pull_request.number }}
         run: |
+          ./build_tools/benchmarks/generate_benchmark_comment.py \
+            --pr_commit "${GITHUB_SHA}" \
+            --pr_number "${PR_NUMBER}" \
+            --build_url="${IREE_BUILD_URL}" \
+            --benchmark_files ./c2-standard-16-benchmark-results.json \
+            --output benchmark_comment.json
           echo "${GCS_DIR}"
