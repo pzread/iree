@@ -39,6 +39,8 @@ jobs:
           IREE_BUILD_URL: https://github.com/iree-org/iree/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          sed -i "s/562b08f4b789bc7f14e48c125c75f6cc31fed31e/${GITHUB_SHA}/" \
+            ./c2-standard-16-benchmark-results.json
           ./build_tools/benchmarks/generate_benchmark_comment.py \
             --pr_commit "${GITHUB_SHA}" \
             --pr_number "${PR_NUMBER}" \
