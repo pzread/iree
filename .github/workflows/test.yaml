@@ -33,11 +33,13 @@ jobs:
       - name: "Install"
         run: |
           pip install markdown_strings
-      - name: "Dummy"
+      - name: "Generating benchmark comment"
+        id: generate
         env:
           IREE_DASHBOARD_URL: www.example.com
-          IREE_BUILD_URL: https://github.com/iree-org/iree/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          IREE_BUILD_URL: https://github.com/iree-org/iree/actions/runs/
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BENCHMARK_COMMENT_ARTIFACT: benchmark_comment.json
         run: |
           sed -i "s/562b08f4b789bc7f14e48c125c75f6cc31fed31e/${GITHUB_SHA}/" \
             ./c2-standard-16-benchmark-results.json
@@ -46,5 +48,10 @@ jobs:
             --pr_number "${PR_NUMBER}" \
             --build_url="${IREE_BUILD_URL}" \
             --benchmark_files ./c2-standard-16-benchmark-results.json \
-            --output benchmark_comment.json
-          echo "${GCS_DIR}"
+            --output "${BENCHMARK_COMMENT_ARTIFACT}"
+          echo "benchmark-comment-artifact=${BENCHMARK_COMMENT_ARTIFACT}" >> "${GITHUB_OUTPUT}"
+      - name: Uploading benchmark comment artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-comment-artifact-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.generate.outputs.benchmark-comment-artifact }}
