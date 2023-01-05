@@ -35,29 +35,22 @@ jobs:
       - name: "Install"
         run: |
           pip install markdown_strings
-      - name: "Getting PR base commit"
-        id: get-base
-        run: |
-          git merge-base "origin/${GITHUB_BASE_REF}" "${GITHUB_SHA}" > pr-base-commit
-          export BASE_COMMIT="$(cat pr-base-commit)"
-          echo "Found ${BASE_COMMIT} as the PR base commit."
-          echo "pr-base-commit=${BASE_COMMIT}" >> "${GITHUB_OUTPUT}"
       - name: "Generating benchmark comment"
         id: generate
         env:
           IREE_DASHBOARD_URL: https://perf.iree.dev
           IREE_BUILD_URL: https://github.com/iree-org/iree/actions/runs/
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BASE_COMMIT: ${{ steps.get-base.outputs.pr-base-commit }}
           BENCHMARK_COMMENT_ARTIFACT: benchmark-comment.json
         run: |
           sed -i "s/562b08f4b789bc7f14e48c125c75f6cc31fed31e/${GITHUB_SHA}/" \
             ./c2-standard-16-benchmark-results.json
           ./build_tools/benchmarks/generate_benchmark_comment.py \
             --verbose \
-            --pr_commit="${GITHUB_SHA}" \
             --pr_number="${PR_NUMBER}" \
-            --pr_base_commit="${PR_BASE_COMMIT}" \
+            --pr_committish="${GITHUB_SHA}" \
+            --pr_base_branch="origin/${GITHUB_BASE_REF}" \
+            --comment_type="benchmark-summary" \
             --build_url="${IREE_BUILD_URL}" \
             --benchmark_files="./c2-standard-16-benchmark-results.json" \
             --output="${BENCHMARK_COMMENT_ARTIFACT}"
