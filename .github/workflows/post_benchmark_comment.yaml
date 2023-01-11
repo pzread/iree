@@ -73,12 +73,12 @@ jobs:
           PR_CI_GCS_URL: https://storage.googleapis.com/iree-github-actions-${{ env.PR_CI_STAGE }}-artifacts/${{ env.PR_CI_RUN_ID }}/${{ env.PR_CI_RUN_ATTEMPT }}
           BENCHMARK_COMMENT_ARTIFACT: benchmark-comment.json
         run: |
-          wget -O "${BENCHMARK_COMMENT_ARTIFACT}" \
-            "${PR_CI_GCS_URL}/${BENCHMARK_COMMENT_ARTIFACT}"
+          # wget -O "${BENCHMARK_COMMENT_ARTIFACT}" \
+          #   "${PR_CI_GCS_URL}/${BENCHMARK_COMMENT_ARTIFACT}"
           echo "benchmark-comment-artifact=${BENCHMARK_COMMENT_ARTIFACT}" >> "${GITHUB_OUTPUT}"
       - name: Posting comments
         # TODO(#11076): Temporarily disabled until we migrate the database.
-        if: false && steps.check.job-conclusion == 'success'
+        if: true && steps.check.job-conclusion == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIST_BOT_TOKEN: ${{ secrets.GIST_BOT_TOKEN }}
