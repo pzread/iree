@@ -682,6 +682,19 @@ class CompilationInfo(object):
                compile_tags=tuple(compile_tags))
 
   @staticmethod
+  def from_str(name: str):
+    (model_name, model_tags, model_source, target_arch, mode_tags,
+     metric_key) = name.split()
+    model_source = model_source.strip("()")
+    model_tags = model_tags.strip("[]").split(",")
+    compile_tags = mode_tags.split(",")
+    return CompilationInfo(model_name=model_name,
+                           model_tags=tuple(model_tags),
+                           model_source=model_source,
+                           target_arch=target_arch,
+                           compile_tags=tuple(compile_tags))
+
+  @staticmethod
   def from_json_object(json_object: Dict[str, Any]):
     return CompilationInfo(name=json_object["name"],
                            model_name=json_object["model_name"],
