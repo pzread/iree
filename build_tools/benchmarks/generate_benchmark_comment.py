@@ -27,10 +27,10 @@ from common import benchmark_definition, benchmark_presentation, common_argument
 from reporting import benchmark_comment
 
 GITHUB_IREE_REPO_PREFIX = "https://github.com/openxla/iree"
-IREE_DASHBOARD_URL = "https://perf.iree.dev/apis/v2"
+IREE_DASHBOARD_URL = "http://127.0.0.1:7000/apis/v2"
 IREE_PROJECT_ID = 'IREE'
 # The maximal numbers of trials when querying base commit benchmark results.
-MAX_BASE_COMMIT_QUERY_COUNT = 10
+MAX_BASE_COMMIT_QUERY_COUNT = 60
 # The max number of rows to show per table.
 TABLE_SIZE_CUT = 3
 THIS_DIRECTORY = pathlib.Path(__file__).resolve().parent
@@ -80,7 +80,7 @@ def get_from_dashboard(url: str,
   code = response.status_code
   if code != 200:
     raise requests.RequestException(
-        f'Failed to get from dashboard server with status code {code}')
+        f'Failed to get from dashboard server with status code {code} - {response.text}')
 
   data = response.json()
   if verbose:
@@ -125,6 +125,8 @@ def _find_comparable_benchmark_results(
     base_benchmarks = query_base_benchmark_results(commit=base_commit,
                                                    verbose=verbose)
     base_benchmark_keys = set(base_benchmarks.keys())
+    if "MobileNetV2_fp32 [fp32,imagenet] (exported_tflite) [cpu-x86_64-cascadelake-linux-gnu] default-flags,compile-stats [compilation:module:compilation-time]" in base_benchmark_keys:
+      print(required_benchmark_keys.difference(base_benchmark_keys))
     if required_benchmark_keys <= base_benchmark_keys:
       return ComparableBenchmarkResults(commit_sha=base_commit,
                                         benchmark_results=base_benchmarks)

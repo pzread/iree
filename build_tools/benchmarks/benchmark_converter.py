@@ -203,9 +203,8 @@ def main():
         print(new_series_info[replace])
     else:
       new_series_info[replace] = value
-      orig_data = (series_db / key).with_suffix(".json").read_text()
-      (series_db / replace).with_suffix(".json").write_text(orig_data)
-      print(replace, key)
+      orig_data = (series_db / f"{key}.json").read_text()
+      (series_db / f"{replace}.json").write_text(orig_data)
 
   (args.db_dir / "infos/benchmarks.series.json").write_text(json.dumps(new_series_info))
 
