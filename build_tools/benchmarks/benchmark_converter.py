@@ -74,6 +74,7 @@ def main():
   gen_configs, run_configs = benchmark_collections.generate_benchmarks()
 
   series_db = args.db_dir / "series"
+  comments_db = args.db_dir / "comments"
 
   replacements = {}
   for series_json in series_db.iterdir():
@@ -179,15 +180,11 @@ def main():
           device_info=bench_info.device_info)
       replacements[str(bench_info)] = str(new_bench_info)
 
-  series_info_file = args.db_dir / "infos/benchmarks.series.json.orig"
+  series_info_file = args.db_dir / "infos/benchmarks.series.json"
   series_info = json.loads(series_info_file.read_text())
   new_series_info = dict(series_info)
   for key, value in series_info.items():
     if key.startswith("MiniLML12H384Uncased [int32] (TF)"):
-      continue
-    if key.startswith("MobileBertSquad [int8] (TFLite) CPU-ARM64-v8A little-core,full-inference,experimental-flags ["):
-      continue
-    if key.startswith("MobileBertSquad [int8] (TFLite) CPU-ARM64-v8A big-core,full-inference,experimental-flags ["):
       continue
 
     try:
@@ -205,8 +202,10 @@ def main():
       new_series_info[replace] = value
       orig_data = (series_db / f"{key}.json").read_text()
       (series_db / f"{replace}.json").write_text(orig_data)
+      orig_data = (comments_db / f"{key}.json").read_text()
+      (comments_db / f"{replace}.json").write_text(orig_data)
 
-  (args.db_dir / "infos/benchmarks.series.json").write_text(json.dumps(new_series_info))
+  series_info_file.write_text(json.dumps(new_series_info))
 
 
 if __name__ == "__main__":
