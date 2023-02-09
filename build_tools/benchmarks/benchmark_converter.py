@@ -69,6 +69,7 @@ def find_model(model_name: str, model_tags: Sequence[str], model_source: str):
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument("db_dir", type=pathlib.Path)
+  parser.add_argument("--dry_run", action="store_true")
   args = parser.parse_args()
 
   gen_configs, run_configs = benchmark_collections.generate_benchmarks()
@@ -128,7 +129,9 @@ def main():
           model_source=model.source_type.value,
           target_arch=f"[{','.join(target_archs)}]",
           compile_tags=tuple(compile_config.tags))
-      replacements[f"{comp_info} {suffix}"] = f"{new_compilation_info} {suffix}"
+      replacements[f"{comp_info} {suffix}"] = (
+          f"{matched_gen_config.composite_id()}{suffix}",
+          f"{new_compilation_info} {suffix}")
 
     else:
       device_name = series_name.split("@")[-1].strip()
@@ -178,34 +181,60 @@ def main():
           compile_tags=compile_tags,
           driver_info=bench_info.driver_info,
           device_info=bench_info.device_info)
-      replacements[str(bench_info)] = str(new_bench_info)
+      replacements[str(bench_info)] = (matched_run_config.composite_id(),
+                                       str(new_bench_info))
 
   series_info_file = args.db_dir / "infos/benchmarks.series.json"
   series_info = json.loads(series_info_file.read_text())
   new_series_info = dict(series_info)
-  for key, value in series_info.items():
+  unlink_list = []
+  for key in series_info.keys():
     if key.startswith("MiniLML12H384Uncased [int32] (TF)"):
       continue
 
     try:
-      replace = replacements[key]
+      (replace, replace_series_name) = replacements[key]
     except KeyError:
       continue
-    del new_series_info[key]
-    if replace in new_series_info:
-      if value != new_series_info[replace]:
-        print(replace)
-        print(key)
-        print(value)
-        print(new_series_info[replace])
-    else:
-      new_series_info[replace] = value
-      orig_data = (series_db / f"{key}.json").read_text()
-      (series_db / f"{replace}.json").write_text(orig_data)
-      orig_data = (comments_db / f"{key}.json").read_text()
-      (comments_db / f"{replace}.json").write_text(orig_data)
 
-  series_info_file.write_text(json.dumps(new_series_info))
+    value = new_series_info.pop(key)
+    value["serieName"] = replace_series_name
+
+    unlink_list.append(key)
+
+    if replace in new_series_info:
+      if value == new_series_info[replace]:
+        continue
+      if key.startswith("MobileBertSquad [int8] (TFLite) CPU-ARM64-v8A"):
+        if "thread" not in key:
+          continue
+      print(replace)
+      print(key)
+      print(value)
+      print(new_series_info[replace])
+      continue
+
+    new_series_info[replace] = value
+    series_file = series_db / f"{key}.json"
+    orig_data = json.loads(series_file.read_text())
+    orig_data["serieName"] = replace_series_name
+    if not args.dry_run:
+      (series_db / f"{replace}.json").write_text(json.dumps(orig_data))
+
+    comment_file = comments_db / f"{key}.json"
+    if comment_file.exists():
+      orig_data = comment_file.read_text()
+      if not args.dry_run:
+        (comments_db / f"{replace}.json").write_text(orig_data)
+
+  if not args.dry_run:
+    series_info_file.write_text(json.dumps(new_series_info))
+
+    for key in unlink_list:
+      (series_db / f"{key}.json").unlink()
+      comment_file = comments_db / f"{key}.json"
+      if comment_file.exists():
+        comment_file.unlink()
 
 
 if __name__ == "__main__":
