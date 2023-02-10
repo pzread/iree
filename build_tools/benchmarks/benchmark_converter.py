@@ -13,7 +13,7 @@ from typing import Sequence
 sys.path.insert(0, str(pathlib.Path(__file__).parent.with_name("python")))
 
 import argparse
-from common import benchmark_definition
+from common import benchmark_definition, benchmark_presentation
 from e2e_test_framework.models import model_groups
 from e2e_test_framework.definitions import common_definitions
 from benchmark_suites.iree import benchmark_collections
@@ -129,8 +129,9 @@ def main():
           model_source=model.source_type.value,
           target_arch=f"[{','.join(target_archs)}]",
           compile_tags=tuple(compile_config.tags))
+      metric_id = benchmark_presentation.METRIC_ID_MAP[suffix[1:-1]]
       replacements[f"{comp_info} {suffix}"] = (
-          f"{matched_gen_config.composite_id()}{suffix}",
+          f"{matched_gen_config.composite_id()}-{metric_id}",
           f"{new_compilation_info} {suffix}")
 
     else:
