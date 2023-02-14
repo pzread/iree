@@ -48,7 +48,7 @@ ARCH_MAP = {
     "GPU-CUDA-SM_80":
         common_definitions.DeviceArchitecture.CUDA_SM80,
     "GPU-Mali-Valhall":
-        common_definitions.DeviceArchitecture.MALI_VALHALL,
+        common_definitions.DeviceArchitecture.VALHALL_MALI,
     "GPU-Adreno":
         common_definitions.DeviceArchitecture.ADRENO_GENERIC,
 }
@@ -60,7 +60,7 @@ def find_model(model_name: str, model_tags: Sequence[str], model_source: str):
   for model in models:
     if (model.name.upper().startswith(model_name.upper()) and
         set(model.tags) >= set(model_tags) and
-        model.source_type.value.upper().endswith(model_source.upper())):
+        model_source.upper() in model.source_type.value.upper()):
       matched_models.append(model)
 
   return matched_models
