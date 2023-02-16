@@ -44,13 +44,12 @@ def get_benchmark_result_markdown(
     if bench in target_benchmarks:
       target_benchmarks[bench].base_mean_time = base_benchmarks[bench].mean_time
 
-  for target_name, base_metrics in base_compilation_metrics.items():
-    updated_metrics = base_metrics
+  for target_key, base_metrics in base_compilation_metrics.items():
+    updated_metrics = target_compilation_metrics[target_key]
     for mapper in COMPILATION_METRICS_TO_TABLE_MAPPERS:
-      metric_key = mapper.get_series_name(target_name)
       base_value, _ = mapper.get_current_and_base_value(base_metrics)
       updated_metrics = mapper.update_base_value(updated_metrics, base_value)
-    target_compilation_metrics[target_name] = updated_metrics
+    target_compilation_metrics[target_key] = updated_metrics
 
   # Compose the full benchmark tables.
   full_table = [md.header("Full Benchmark Summary", 2)]
