@@ -24,6 +24,11 @@ IREE_FLAG(bool, cuda_allow_inline_execution, false,
           "Allow command buffers to execute inline against CUDA streams when "
           "possible.");
 
+IREE_FLAG(bool, cuda_tracing, true,
+          "Enables tracing of stream events when Tracy instrumentation is "
+          "enabled. Severely impacts benchmark timings and should only be used "
+          "when analyzing dispatch timings.");
+
 IREE_FLAG(int32_t, cuda_default_index, 0, "Index of the default CUDA device.");
 
 static iree_status_t iree_hal_cuda_driver_factory_enumerate(
@@ -37,6 +42,43 @@ static iree_status_t iree_hal_cuda_driver_factory_enumerate(
   *out_driver_info_count = IREE_ARRAYSIZE(driver_infos);
   *out_driver_infos = driver_infos;
   return iree_ok_status();
+}
+
+static iree_status_t iree_hal_cuda_init_nccl_rank_and_count(
+    iree_hal_cuda_device_params_t* params) {
+  params->nccl_default_count = 0;
+  params->nccl_default_rank = 0;
+
+  char* nprocs_str = getenv("IREE_CUDA_NCCL_NPROCS");
+  if (!nprocs_str) {
+    return iree_ok_status();
+  }
+
+  int nprocs = atoi(nprocs_str);
+  if (nprocs <= 0) {
+    return iree_make_status(
+        IREE_STATUS_INVALID_ARGUMENT,
+        "IREE_CUDA_NCCL_NPROCS has invalid value '%s'; expected integer >= 0",
+        nprocs_str);
+  }
+  params->nccl_default_count = nprocs;
+
+  char* procid_str = getenv("IREE_CUDA_NCCL_PROCID");
+  if (!procid_str) {
+    // Expected PROCID when NPROCS is set.
+    return iree_make_status(
+        IREE_STATUS_INVALID_ARGUMENT,
+        "IREE_CUDA_NCCL_PROCID must be set when IREE_CUDA_NCCL_NPROCS is set.");
+  }
+  int procid = atoi(procid_str);
+  if (procid < 0 || procid >= nprocs) {
+    return iree_make_status(
+        IREE_STATUS_INVALID_ARGUMENT,
+        "IREE_CUDA_NCCL_PROCID has invalid value '%s'; expected integer >= 0",
+        procid_str);
+  }
+  params->nccl_default_rank = procid;
+  return iree_status_from_code(IREE_STATUS_OK);
 }
 
 static iree_status_t iree_hal_cuda_driver_factory_try_create(
@@ -58,14 +100,24 @@ static iree_status_t iree_hal_cuda_driver_factory_try_create(
         IREE_HAL_CUDA_COMMAND_BUFFER_MODE_STREAM;
   }
   default_params.allow_inline_execution = FLAG_cuda_allow_inline_execution;
-
-  iree_hal_cuda_driver_options_t driver_options;
-  iree_hal_cuda_driver_options_initialize(&driver_options);
-  driver_options.default_device_index = FLAG_cuda_default_index;
+  default_params.stream_tracing = FLAG_cuda_tracing;
 
   iree_status_t status =
-      iree_hal_cuda_driver_create(driver_name, &default_params, &driver_options,
-                                  host_allocator, out_driver);
+      iree_hal_cuda_init_nccl_rank_and_count(&default_params);
+
+  if (iree_status_is_ok(status)) {
+    // Note that nccl_default_id can't be initalized until the driver imports
+    // the NCCL symbols from the dynamic library.
+
+    iree_hal_cuda_driver_options_t driver_options;
+    iree_hal_cuda_driver_options_initialize(&driver_options);
+    driver_options.default_device_index = FLAG_cuda_default_index;
+
+    status = iree_hal_cuda_driver_create(driver_name, &default_params,
+                                         &driver_options, host_allocator,
+                                         out_driver);
+  }
+
   IREE_TRACE_ZONE_END(z0);
   return status;
 }

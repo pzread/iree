@@ -327,11 +327,13 @@ class LLVMCPUTargetBackend final : public TargetBackend {
     auto *queryLibraryFunc = libraryBuilder.build(queryFunctionName);
 
     // The query function must be exported for dynamic libraries.
+    queryLibraryFunc->setDSOLocal(false);
     queryLibraryFunc->setVisibility(
         llvm::GlobalValue::VisibilityTypes::DefaultVisibility);
     queryLibraryFunc->setLinkage(
         llvm::GlobalValue::LinkageTypes::ExternalLinkage);
-    queryLibraryFunc->setDSOLocal(false);
+    queryLibraryFunc->setDLLStorageClass(
+        llvm::GlobalValue::DLLStorageClassTypes::DLLExportStorageClass);
 
     // If linking dynamically, find a suitable linker tool and configure the
     // module with any options that tool requires.
@@ -412,7 +414,7 @@ class LLVMCPUTargetBackend final : public TargetBackend {
       func.setDSOLocal(true);
       func.setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
     }
-    for (auto &global : llvmModule->getGlobalList()) {
+    for (auto &global : llvmModule->globals()) {
       global.setDSOLocal(true);
       global.setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
     }
@@ -822,6 +824,7 @@ void registerLLVMCPUTargetBackends(
 #define LLVM_INITIALIZE_TARGET_BPF()
 #define LLVM_INITIALIZE_TARGET_Hexagon()
 #define LLVM_INITIALIZE_TARGET_Lanai()
+#define LLVM_INITIALIZE_TARGET_LoongArch()
 #define LLVM_INITIALIZE_TARGET_Mips()
 #define LLVM_INITIALIZE_TARGET_MSP430()
 #define LLVM_INITIALIZE_TARGET_NVPTX()

@@ -299,9 +299,13 @@ py::list HalDriver::QueryAvailableDevices() {
                  "Error querying devices");
   py::list results;
   for (iree_host_size_t i = 0; i < count; ++i) {
-    results.append(py::make_tuple(
-        py::cast(device_infos[i].device_id),
-        py::str(device_infos[i].name.data, device_infos[i].name.size)));
+    py::dict device_data;
+    device_data["device_id"] = py::cast(device_infos[i].device_id);
+    device_data["path"] =
+        py::str(device_infos[i].path.data, device_infos[i].path.size);
+    device_data["name"] =
+        py::str(device_infos[i].name.data, device_infos[i].name.size);
+    results.append(device_data);
   }
 
   iree_allocator_free(iree_allocator_system(), device_infos);
@@ -323,9 +327,10 @@ HalDevice HalDriver::CreateDevice(iree_hal_device_id_t device_id) {
   bool found = false;
   py::object compare_device_id = py::cast(device_id);
   for (auto record : available_devices) {
-    // Each record is a tuple of (device_id, name).
-    auto record_tuple = py::cast<py::tuple>(record);
-    py::object found_device_id = record_tuple[0];
+    // Each record is a dict:
+    // {"device_id": obj, "path": str, "name": str}.
+    auto record_dict = py::cast<py::dict>(record);
+    py::object found_device_id = record_dict["device_id"];
     if (found_device_id.is(compare_device_id)) {
       found = true;
       break;
@@ -586,10 +591,11 @@ void SetupHalBindings(pybind11::module m) {
            py::keep_alive<0, 1>())
       .def(
           "create_device",
-          [](HalDriver& self, py::tuple device_info) -> HalDevice {
-            // Alias of create_device that takes a tuple as returned from
+          [](HalDriver& self, py::dict device_info) -> HalDevice {
+            // Alias of create_device that takes a dict as returned from
             // query_available_devices for convenience.
-            auto device_id = py::cast<iree_hal_device_id_t>(device_info[0]);
+            auto device_id =
+                py::cast<iree_hal_device_id_t>(device_info["device_id"]);
             return self.CreateDevice(device_id);
           },
           py::keep_alive<0, 1>())
@@ -616,14 +622,15 @@ void SetupHalBindings(pybind11::module m) {
       .def_property_readonly("formatted_statistics",
                              &HalAllocator::FormattedStatistics)
       .def(
-          "query_compatibility",
+          "query_buffer_compatibility",
           [](HalAllocator& self, int memory_type, int allowed_usage,
              int intended_usage, iree_device_size_t allocation_size) -> int {
             iree_hal_buffer_params_t params = {0};
             params.type = memory_type;
             params.usage = allowed_usage & intended_usage;
-            return iree_hal_allocator_query_compatibility(
-                self.raw_ptr(), params, allocation_size);
+            return iree_hal_allocator_query_buffer_compatibility(
+                self.raw_ptr(), params, allocation_size,
+                /*out_params=*/nullptr, /*out_allocation_size=*/0);
           },
           py::arg("memory_type"), py::arg("allowed_usage"),
           py::arg("intended_usage"), py::arg("allocation_size"))

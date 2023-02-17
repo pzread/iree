@@ -34,6 +34,7 @@ iree_cc_library(
     IREEDialectsTransforms
     IREELinalgTransformDialect
     MLIRArithDialect
+    MLIRBufferizationDialect
     MLIRFuncDialect
     MLIRGPUOps
     MLIRGPUTransformOps
@@ -41,13 +42,17 @@ iree_cc_library(
     MLIRLinalgTransforms
     MLIRLinalgUtils
     MLIRMemRefDialect
+    MLIRNVGPUDialect
     MLIRPDLDialect
     MLIRPass
     MLIRSCFDialect
     MLIRTransformDialect
     MLIRTransforms
     MLIRVectorDialect
+    MLIRVectorToGPU
     MLIRVectorTransforms
+    iree::compiler::Codegen::Common::CommonPasses
+    iree::compiler::Codegen::LLVMGPU::Utils
     iree::compiler::Codegen::Utils
     iree::compiler::Dialect::HAL::IR
   PUBLIC

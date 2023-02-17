@@ -39,6 +39,7 @@ iree_cc_library(
     MLIRArithUtils
     MLIRAsyncDialect
     MLIRBufferizationDialect
+    MLIRBufferizationTransformOps
     MLIRBufferizationTransforms
     MLIRFuncDialect
     MLIRGPUOps
@@ -51,7 +52,6 @@ iree_cc_library(
     MLIRMemRefTransformOps
     MLIRPDLDialect
     MLIRPDLInterpDialect
-    MLIRParser
     MLIRPass
     MLIRRewrite
     MLIRSCFDialect
@@ -72,6 +72,7 @@ iree_cc_library(
     iree::compiler::Codegen::TransformDialectStrategies::Common::TransformDialectStrategies
     iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::Flow::TransformExtensions::FlowExtensions
+    iree::compiler::Utils
   PUBLIC
 )
 
@@ -80,6 +81,7 @@ iree_cc_library(
     CommonPasses
   HDRS
     "BufferizationAnalysis.h"
+    "EncodingInfo.h"
     "Transforms.h"
   SRCS
     "BufferizationAnalysis.cpp"
@@ -92,8 +94,11 @@ iree_cc_library(
     "FoldTensorExtractOpPass.cpp"
     "ForOpCanonicalizationPass.cpp"
     "FuseTensorPadWithConsumer.cpp"
+    "GPUPipelining.cpp"
+    "HoistStaticallyBoundAllocations.cpp"
     "IREEComprehensiveBufferizePass.cpp"
-    "MaterializeEncodingPass.cpp"
+    "LowerUKernelsToCalls.cpp"
+    "MaterializeEncodingIntoPackUnPack.cpp"
     "OptimizeVectorTransferPass.cpp"
     "PolynomialApproximationPass.cpp"
     "RematerializeParallelOps.cpp"
@@ -101,6 +106,7 @@ iree_cc_library(
     "TestPartitionableLoopsInterface.cpp"
     "TileAndDistributeToWorkgroupsPass.cpp"
     "TypePropagationPass.cpp"
+    "VectorizePackUnPackOps.cpp"
     "VectorizePad.cpp"
     "WorkgroupSpecializationPass.cpp"
   DEPS
@@ -139,14 +145,17 @@ iree_cc_library(
     MLIRTensorDialect
     MLIRTensorTransforms
     MLIRTilingInterface
+    MLIRTransformDialect
     MLIRTransforms
     MLIRVectorDialect
     MLIRVectorTransforms
     MLIRViewLikeInterface
+    iree::builtins::ukernel::exported_bits
     iree::compiler::Codegen::Common::FoldTensorExtractOpIncGen
     iree::compiler::Codegen::Dialect::IREECodegenDialect
     iree::compiler::Codegen::Interfaces::BufferizationInterfaces
     iree::compiler::Codegen::Interfaces::PartitionableLoopsInterface
+    iree::compiler::Codegen::Interfaces::UKernelOpInterface
     iree::compiler::Codegen::PassHeaders
     iree::compiler::Codegen::Transforms
     iree::compiler::Codegen::Utils
@@ -171,7 +180,6 @@ iree_cc_library(
     "GPUDistributeSharedMemoryCopy.cpp"
     "GPUMultiBuffering.cpp"
     "GPUPatterns.cpp"
-    "GPUPipelining.cpp"
     "GPUReduceBankConflicts.cpp"
     "GPUTileReduction.cpp"
     "GPUVectorization.cpp"
@@ -223,6 +231,7 @@ iree_cc_library(
     MLIRTensorDialect
     MLIRTensorTransforms
     MLIRTilingInterface
+    MLIRTransformDialect
     MLIRTransforms
     MLIRVectorDialect
     MLIRVectorToSCF

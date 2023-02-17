@@ -19,7 +19,6 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Transform/IR/TransformOps.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
-#include "mlir/Dialect/Vector/TransformOps/VectorTransformOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 
@@ -52,7 +51,8 @@ using transform_ext::StructuredOpMatcher;
 /// Return the handles to the updated variant and the func::FuncOp ops under
 /// the variant op.
 std::pair<Value, Value> mlir::iree_compiler::cpu::buildCommonTrailingStrategy(
-    ImplicitLocOpBuilder &b, Value variantH) {
+    ImplicitLocOpBuilder &b, Value variantH,
+    const vector::LowerVectorsOptions &lowerVectorsOpts) {
   // Step N-2. Bufferize and drop HAL descriptor from memref ops.
   Value funcH = b.create<MatchOp>(variantH, func::FuncOp::getOperationName());
   funcH = iree_compiler::buildVectorize(b, funcH);
@@ -67,7 +67,7 @@ std::pair<Value, Value> mlir::iree_compiler::cpu::buildCommonTrailingStrategy(
 
   // Step N. Lower vectors.
   // TODO: Control the lowering to vectors.
-  funcH = b.create<LowerVectorsOp>(pdlOperation, funcH);
+  funcH = b.create<LowerVectorsOp>(pdlOperation, funcH, lowerVectorsOpts);
   return std::make_pair(variantH, funcH);
 }
 
@@ -101,10 +101,11 @@ static ReductionConfig getReductionConfig(
 LogicalResult iree_compiler::cpu::matchAndSetReductionStrategy(
     func::FuncOp entryPoint, linalg::LinalgOp op, const CPUModel &cpuModel) {
   // 1. Match a reduction and surrounding ops.
-  StructuredOpMatcher reduction, fill, leading, trailing;
+  StructuredOpMatcher *reduction;
   transform_ext::MatchedReductionCaptures captures;
-  makeReductionMatcher(reduction, fill, leading, trailing, captures);
-  if (!matchPattern(op, reduction)) return failure();
+  transform_ext::MatcherContext matcherContext;
+  makeReductionMatcher(matcherContext, reduction, captures);
+  if (!matchPattern(op, *reduction)) return failure();
 
   // 2. Construct the configuration and the strategy builder.
   // TODO: Generalize along the HW axis.

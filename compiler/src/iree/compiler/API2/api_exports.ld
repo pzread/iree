@@ -19,6 +19,7 @@ VER_0 {
     ireeCompilerInvocationParseSource;
     ireeCompilerInvocationPipeline;
     ireeCompilerInvocationSetCompileToPhase;
+    ireeCompilerInvocationSetCrashHandler;
     ireeCompilerInvocationSetVerifyIR;
     ireeCompilerOptionsCreate;
     ireeCompilerOptionsDestroy;
@@ -136,6 +137,7 @@ VER_0 {
     mlirAttributeIsAFloat;
     mlirAttributeIsAInteger;
     mlirAttributeIsAIntegerSet;
+    mlirAttributeIsALocation;
     mlirAttributeIsAOpaque;
     mlirAttributeIsASparseElements;
     mlirAttributeIsAStridedLayout;
@@ -293,6 +295,8 @@ VER_0 {
     mlirFlatSymbolRefAttrGet;
     mlirFlatSymbolRefAttrGetValue;
     mlirFloat8E4M3FNTypeGet;
+    mlirFloat8E4M3FNUZTypeGet;
+    mlirFloat8E5M2FNUZTypeGet;
     mlirFloat8E5M2TypeGet;
     mlirFloatAttrDoubleGet;
     mlirFloatAttrDoubleGetChecked;
@@ -347,7 +351,9 @@ VER_0 {
     mlirLocationCallSiteGet;
     mlirLocationEqual;
     mlirLocationFileLineColGet;
+    mlirLocationFromAttribute;
     mlirLocationFusedGet;
+    mlirLocationGetAttribute;
     mlirLocationGetContext;
     mlirLocationNameGet;
     mlirLocationPrint;
@@ -522,7 +528,9 @@ VER_0 {
     mlirTypeIsAF32;
     mlirTypeIsAF64;
     mlirTypeIsAFloat8E4M3FN;
+    mlirTypeIsAFloat8E4M3FNUZ;
     mlirTypeIsAFloat8E5M2;
+    mlirTypeIsAFloat8E5M2FNUZ;
     mlirTypeIsAFunction;
     mlirTypeIsAIndex;
     mlirTypeIsAInteger;

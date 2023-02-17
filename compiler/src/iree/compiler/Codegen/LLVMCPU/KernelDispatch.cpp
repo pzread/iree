@@ -69,6 +69,13 @@ static llvm::cl::opt<int> defaultWorkgroupTileSize(
         "linalg.generic and linalg.indexed_generic workgroup tile size"),
     llvm::cl::init(64));
 
+// TODO(#12135): remove defaultWorkgroupTileSizeForUnpackOp
+static llvm::cl::opt<int> defaultWorkgroupTileSizeForUnpackOp(
+    "iree-codegen-llvm-generic-ops-workgroup-size-for-unpack-op",
+    llvm::cl::desc("Like iree-codegen-llvm-generic-ops-workgroup-size but "
+                   "specifically for UnpackOp"),
+    llvm::cl::init(16));
+
 // TODO(hanchung): Remove the flag. This is the flag for fastly falling back to
 // the previous snapshot.
 
@@ -367,8 +374,8 @@ static SmallVector<int64_t> getDefaultDistributedLoopTileSizes(
     }
     // Fallback to power of 2 if there's no hint or can't find the ideal size.
     if (vectorSize <= 1 || candidateTileSize == 1) {
-      candidateTileSize =
-          std::max<int64_t>(llvm::PowerOf2Floor(targetSize), minTileSizes[i]);
+      candidateTileSize = std::max<int64_t>(
+          llvm::bit_floor<uint64_t>(targetSize), minTileSizes[i]);
     }
 
     // Limit the workload per workgroup to the default being the max to keep the
@@ -816,7 +823,7 @@ static LogicalResult setAArch64RootConfig(func::FuncOp entryPointFn,
 
   return setOpConfigAndEntryPointFnTranslation(
       entryPointFn, op, tileSizes,
-      DispatchLoweringPassPipeline::CPUAArchDoubleTilingExpert);
+      DispatchLoweringPassPipeline::Mmt4dTilingExpert);
 }
 
 /// Returns default hard-coded workgroup sizes for a give target. No smartness
@@ -1034,7 +1041,7 @@ static LogicalResult setRootConfig(func::FuncOp entryPointFn,
 
   return setOpConfigAndEntryPointFnTranslation(
       entryPointFn, mmt4dOp, tileSizes,
-      DispatchLoweringPassPipeline::CPUAArchDoubleTilingExpert);
+      DispatchLoweringPassPipeline::Mmt4dTilingExpert);
 }
 
 static SmallVector<int64_t> getLinalgExtDefaultWorkgroupTileSizes(
@@ -1054,22 +1061,47 @@ static SmallVector<int64_t> getLinalgExtDefaultWorkgroupTileSizes(
   return workgroupTileSizes;
 }
 
-static LogicalResult setRootConfig(func::FuncOp entryPointFn,
-                                   IREE::LinalgExt::PackOp op) {
-  TileSizesListType tileSizes = {
-      getLinalgExtDefaultWorkgroupTileSizes(op, defaultWorkgroupTileSize)};
+template <typename OpTy>
+static LogicalResult setPackOpRootConfig(func::FuncOp entryPointFn, OpTy op) {
+  // TODO(hanchung): Retire IREE::LinalgExt::PackOp. This is for having
+  // consistent configurations for pack ops.
+  static_assert(
+      llvm::is_one_of<OpTy, IREE::LinalgExt::PackOp, tensor::PackOp>::value);
+  SmallVector<int64_t> tileSizes = getLinalgExtDefaultWorkgroupTileSizes(
+      cast<TilingInterface>(op.getOperation()), defaultWorkgroupTileSize);
+
+  // The default function aims to returns the number of workload per workgroup,
+  // but it does not know that it is working on packed domain. We need to take
+  // inner tile sizes into account and adjust the distribution tile sizes.
+  SmallVector<int64_t> innerTiles = op.getStaticTiles();
+  ArrayRef<int64_t> dimPos = op.getInnerDimsPos();
+  for (auto [pos, size] : llvm::zip_equal(dimPos, innerTiles)) {
+    if (tileSizes[pos] == 0 || ShapedType::isDynamic(size)) continue;
+    tileSizes[pos] = tileSizes[pos] / size;
+    tileSizes[pos] = std::max<int64_t>(tileSizes[pos], 1);
+  }
+
+  TileSizesListType tileSizesList = {tileSizes};
   return setOpConfigAndEntryPointFnTranslation(
-      entryPointFn, op, tileSizes, DispatchLoweringPassPipeline::CPUDataTiling);
+      entryPointFn, op, tileSizesList,
+      DispatchLoweringPassPipeline::CPUDataTiling);
 }
 
-static LogicalResult setRootConfig(
-    func::FuncOp entryPointFn, IREE::LinalgExt::UnPackOp op,
+template <typename OpTy>
+static LogicalResult setUnPackOpRootConfig(
+    func::FuncOp entryPointFn, OpTy op,
     DispatchLoweringPassPipeline pipeline =
         DispatchLoweringPassPipeline::CPUDataTiling) {
+  // TODO(hanchung): Retire IREE::LinalgExt::UnPackOp. This is for having
+  // consistent configurations for unpack ops.
+  static_assert(llvm::is_one_of<OpTy, IREE::LinalgExt::UnPackOp,
+                                tensor::UnPackOp>::value);
+
   // TODO(#11505): Consider multi-level tiling for handling unpack + generic
   // cases.
-  SmallVector<int64_t> tileSizes =
-      getLinalgExtDefaultWorkgroupTileSizes(op, /*defaultSize=*/16);
+  SmallVector<int64_t> tileSizes = getLinalgExtDefaultWorkgroupTileSizes(
+      cast<TilingInterface>(op.getOperation()),
+      /*defaultSize=*/defaultWorkgroupTileSizeForUnpackOp);
 
   // Fixup for making tileSizes be multiple of inner_tile_sizes.
   SmallVector<int64_t> innerTiles = op.getStaticTiles();
@@ -1481,40 +1513,48 @@ static SmallVector<int64_t> getConvWorkgroupSizes(func::FuncOp entryPointFn,
 
   if (isX86(targetAttr)) {
     TypeSwitch<Operation *>(op.getOperation())
-        .Case<linalg::Conv2DNhwcHwcfOp, linalg::PoolingNhwcSumOp,
-              linalg::PoolingNhwcMaxOp, linalg::PoolingNhwcMaxUnsignedOp,
-              linalg::PoolingNhwcMinOp, linalg::PoolingNhwcMinUnsignedOp>(
+        .Case<linalg::Conv2DNhwcHwcfOp>(
             [&](auto op) { tileSizes = {1, 1, 8, vectorSize * 2, 1, 1, 8}; })
+        .Case<linalg::PoolingNhwcSumOp, linalg::PoolingNhwcMaxOp,
+              linalg::PoolingNhwcMaxUnsignedOp, linalg::PoolingNhwcMinOp,
+              linalg::PoolingNhwcMinUnsignedOp>(
+            [&](auto op) { tileSizes = {1, 1, 8, vectorSize * 2, 1, 8}; })
         .Case<linalg::DepthwiseConv2DNhwcHwcOp>(
             [&](auto op) { tileSizes = {1, 1, 8, vectorSize * 2, 1, 3}; })
         .Default([&](Operation *op) { llvm_unreachable("unsupported conv"); });
   } else if (isRISCV(targetAttr)) {
     TypeSwitch<Operation *>(op.getOperation())
-        .Case<linalg::Conv2DNhwcHwcfOp, linalg::PoolingNhwcSumOp,
-              linalg::PoolingNhwcMaxOp, linalg::PoolingNhwcMaxUnsignedOp,
-              linalg::PoolingNhwcMinOp, linalg::PoolingNhwcMinUnsignedOp>(
+        .Case<linalg::Conv2DNhwcHwcfOp>(
             [&](auto op) { tileSizes = {1, 1, 8, vectorSize * 2, 1, 1, 8}; })
+        .Case<linalg::PoolingNhwcSumOp, linalg::PoolingNhwcMaxOp,
+              linalg::PoolingNhwcMaxUnsignedOp, linalg::PoolingNhwcMinOp,
+              linalg::PoolingNhwcMinUnsignedOp>(
+            [&](auto op) { tileSizes = {1, 1, 8, vectorSize * 2, 1, 8}; })
         .Case<linalg::DepthwiseConv2DNhwcHwcOp>(
             [&](auto op) { tileSizes = {1, 1, 8, vectorSize, 1, 3}; })
         .Default([&](Operation *op) { llvm_unreachable("unsupported conv"); });
   } else if (isAArch64(targetAttr)) {
     TypeSwitch<Operation *>(op.getOperation())
-        .Case<linalg::Conv2DNhwcHwcfOp, linalg::PoolingNhwcSumOp,
-              linalg::PoolingNhwcMaxOp, linalg::PoolingNhwcMaxUnsignedOp,
-              linalg::PoolingNhwcMinOp, linalg::PoolingNhwcMinUnsignedOp>(
+        .Case<linalg::Conv2DNhwcHwcfOp>(
             [&](auto op) { tileSizes = {1, 1, 32, 64, 1, 1, 16}; })
+        .Case<linalg::PoolingNhwcSumOp, linalg::PoolingNhwcMaxOp,
+              linalg::PoolingNhwcMaxUnsignedOp, linalg::PoolingNhwcMinOp,
+              linalg::PoolingNhwcMinUnsignedOp>(
+            [&](auto op) { tileSizes = {1, 1, 32, 64, 1, 16}; })
         .Case<linalg::DepthwiseConv2DNhwcHwcOp>(
             [&](auto op) { tileSizes = {1, 1, 4, 4, 1, 4}; })
         .Default([&](Operation *op) { llvm_unreachable("unsupported conv"); });
   } else {
     // Get default hard-coded tile sizes if we couldn't compute anything better.
     TypeSwitch<Operation *>(op.getOperation())
-        .Case<linalg::Conv2DNhwcHwcfOp, linalg::PoolingNhwcSumOp,
-              linalg::PoolingNhwcMaxOp, linalg::PoolingNhwcMaxUnsignedOp,
-              linalg::PoolingNhwcMinOp, linalg::PoolingNhwcMinUnsignedOp>(
-            [&](auto op) {
-              tileSizes = {1, 1, vectorSize, vectorSize, 1, 1, vectorSize};
-            })
+        .Case<linalg::Conv2DNhwcHwcfOp>([&](auto op) {
+          tileSizes = {1, 1, vectorSize, vectorSize, 1, 1, vectorSize};
+        })
+        .Case<linalg::PoolingNhwcSumOp, linalg::PoolingNhwcMaxOp,
+              linalg::PoolingNhwcMaxUnsignedOp, linalg::PoolingNhwcMinOp,
+              linalg::PoolingNhwcMinUnsignedOp>([&](auto op) {
+          tileSizes = {1, 1, vectorSize, vectorSize, 1, vectorSize};
+        })
         .Case<linalg::DepthwiseConv2DNhwcHwcOp>([&](auto op) {
           tileSizes = {1, 1, vectorSize, vectorSize, 1, vectorSize};
         })
@@ -1613,14 +1653,6 @@ static LogicalResult setRootConfig(
   auto translationInfo = IREE::Codegen::TranslationInfoAttr::get(
       entryPointFn->getContext(), pipeline);
 
-  // Always vectorize the ops for VMVX pipeline because stack allocation is not
-  // allowed.
-  if (pipeline == DispatchLoweringPassPipeline::VMVXDefault) {
-    for (int i = 0, e = ubs.size(); i < e; ++i) {
-      if (ubs[i] == ShapedType::kDynamic) ubs[i] = 1;
-    }
-  }
-
   if (failed(setTranslationInfo(entryPointFn, translationInfo))) {
     return failure();
   }
@@ -1674,11 +1706,17 @@ static LogicalResult setRootConfigImpl(
           return setRootConfig(entryPointFn, op, LinalgOpInfo(op),
                                targetMLTransInfo);
         })
-        .Case<IREE::LinalgExt::FftOp, IREE::LinalgExt::PackOp,
-              IREE::LinalgExt::UnPackOp, linalg::Mmt4DOp,
-              linalg::Conv2DNhwcHwcfOp, linalg::Conv2DNchwFchwOp,
+        .Case<IREE::LinalgExt::FftOp, linalg::Mmt4DOp, linalg::Conv2DNhwcHwcfOp,
+              linalg::Conv2DNchwFchwOp, linalg::PoolingNhwcSumOp,
+              linalg::PoolingNhwcMaxOp, linalg::PoolingNhwcMaxUnsignedOp,
+              linalg::PoolingNhwcMinOp, linalg::PoolingNhwcMinUnsignedOp,
+              linalg::PoolingNchwSumOp, linalg::PoolingNchwMaxOp,
               linalg::DepthwiseConv2DNhwcHwcOp>(
             [&](auto op) { return setRootConfig(entryPointFn, op); })
+        .Case<IREE::LinalgExt::PackOp, tensor::PackOp>(
+            [&](auto op) { return setPackOpRootConfig(entryPointFn, op); })
+        .Case<IREE::LinalgExt::UnPackOp, tensor::UnPackOp>(
+            [&](auto op) { return setUnPackOpRootConfig(entryPointFn, op); })
         .Case<linalg::ContractionOpInterface>(
             [&](auto op) { return setRootConfig(entryPointFn, op); })
         .Case<linalg::LinalgOp>(
@@ -1699,13 +1737,17 @@ static LogicalResult setVMVXRootConfigImpl(func::FuncOp entryPointFn,
   // Redirect to individual operations.
   auto setRootConfigFn = [&](Operation *op) -> LogicalResult {
     return TypeSwitch<Operation *, LogicalResult>(op)
-        .Case<IREE::LinalgExt::FftOp, IREE::LinalgExt::UnPackOp>([&](auto op) {
+        .Case<IREE::LinalgExt::FftOp>([&](auto op) {
           return setRootConfig(entryPointFn, op,
                                DispatchLoweringPassPipeline::VMVXDefault);
         })
         .Case<linalg::LinalgOp>([&](auto op) {
           return setRootConfig(entryPointFn, op,
                                DispatchLoweringPassPipeline::VMVXDefault);
+        })
+        .Case<IREE::LinalgExt::UnPackOp, tensor::UnPackOp>([&](auto op) {
+          return setUnPackOpRootConfig(
+              entryPointFn, op, DispatchLoweringPassPipeline::VMVXDefault);
         })
         .Case<TilingInterface>([&](auto op) {
           return setRootConfig(entryPointFn, op,

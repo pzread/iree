@@ -10,7 +10,7 @@
 #include "iree/compiler/Codegen/Interfaces/PartitionableLoopsInterface.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/Triple.h"
+#include "llvm/TargetParser/Triple.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
@@ -67,10 +67,12 @@ Optional<StringRef> getCpuFeatures(IREE::HAL::ExecutableTargetAttr targetAttr);
 
 /// Methods to get target information.
 bool isX86(IREE::HAL::ExecutableTargetAttr targetAttr);
+bool isX86_64(IREE::HAL::ExecutableTargetAttr targetAttr);
 bool isAArch64(IREE::HAL::ExecutableTargetAttr targetAttr);
 bool isRISCV(IREE::HAL::ExecutableTargetAttr targetAttr);
 bool isVMVXBackend(IREE::HAL::ExecutableTargetAttr targetAttr);
 bool hasMicrokernels(IREE::HAL::ExecutableTargetAttr targetAttr);
+bool preferIntrinsicsOverAsm(IREE::HAL::ExecutableTargetAttr targetAttr);
 
 /// Returns true if `targetAttr` has `feature` in its CPU features.
 bool hasFeature(IREE::HAL::ExecutableTargetAttr targetAttr, StringRef feature);

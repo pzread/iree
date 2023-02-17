@@ -49,17 +49,17 @@ class APIRequester(object):
     }
     self._session = requests.session()
 
-  def get(self, endpoint: str, payload: Any) -> requests.Response:
+  def get(self, endpoint: str, payload: Any = {}) -> requests.Response:
     return self._session.get(endpoint,
                              data=json.dumps(payload),
                              headers=self._api_headers)
 
-  def post(self, endpoint: str, payload: Any) -> requests.Response:
+  def post(self, endpoint: str, payload: Any = {}) -> requests.Response:
     return self._session.post(endpoint,
                               data=json.dumps(payload),
                               headers=self._api_headers)
 
-  def patch(self, endpoint: str, payload: Any) -> requests.Response:
+  def patch(self, endpoint: str, payload: Any = {}) -> requests.Response:
     return self._session.patch(endpoint,
                                data=json.dumps(payload),
                                headers=self._api_headers)

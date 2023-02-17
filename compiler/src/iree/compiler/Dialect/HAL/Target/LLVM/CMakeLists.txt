@@ -37,6 +37,7 @@ iree_cc_library(
     LLVMCore
     LLVMLinker
     LLVMSupport
+    LLVMTargetParser
     MLIRArmNeonDialect
     MLIRLLVMDialect
     MLIRLLVMToLLVMIRTranslation
@@ -72,6 +73,7 @@ iree_cc_library(
     LLVMPasses
     LLVMSupport
     LLVMTarget
+    LLVMTargetParser
     MLIRSupport
   PUBLIC
 )
@@ -88,6 +90,7 @@ iree_cc_library(
     LLVMPasses
     LLVMSupport
     LLVMTarget
+    LLVMTargetParser
   PUBLIC
 )
 
@@ -102,6 +105,7 @@ iree_cc_library(
     ::LLVMTargetOptions
     LLVMCore
     LLVMSupport
+    LLVMTargetParser
     MLIRSupport
     iree::compiler::Dialect::HAL::Target::LLVM::internal::LinkerTools_internal
     iree::compiler::Utils
@@ -117,6 +121,7 @@ iree_cc_library(
     ::LLVMTargetOptions
     LLVMCore
     LLVMSupport
+    LLVMTargetParser
     MLIRSupport
   PUBLIC
 )

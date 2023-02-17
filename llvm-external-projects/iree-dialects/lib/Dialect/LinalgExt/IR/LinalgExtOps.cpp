@@ -87,22 +87,6 @@ static Value getSlice(OpBuilder &b, Location loc, Value source,
       .Default([&](Type t) { return nullptr; });
 }
 
-/// Returns true if the dimensions of ShapedType are compatible.
-static bool isShapedTypeDimCompatible(int64_t lhs, int64_t rhs) {
-  return lhs == ShapedType::kDynamic || rhs == ShapedType::kDynamic ||
-         lhs == rhs;
-}
-
-/// Returns true if the dimensions of ShapedType are compatible.
-static bool areShapesCompatible(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
-  if (lhs.size() != rhs.size()) {
-    return false;
-  }
-  return llvm::all_of(llvm::zip(lhs, rhs), [](std::tuple<int64_t, int64_t> it) {
-    return isShapedTypeDimCompatible(std::get<0>(it), std::get<1>(it));
-  });
-}
-
 /// Return true if `dimsPos` is invalid. It is invalid when: a) it contains
 /// duplicate. b) At least one dimension is out of bound (`dimPos` is >= 0 and <
 /// rank). c) the number of elements in `dimsPos` is > than `rank`.
@@ -394,7 +378,7 @@ LogicalResult ScatterOp::generateScalarImplementation(OpBuilder &b,
 
   Value init = b.create<memref::LoadOp>(loc, original(), starts);
 
-  BlockAndValueMapping bvm;
+  IRMapping bvm;
   Block &block = getRegion().front();
   bvm.map(block.getArgument(0), update);
   bvm.map(block.getArgument(1), init);
@@ -567,7 +551,7 @@ LogicalResult SortOp::generateScalarImplementation(OpBuilder &b, Location loc,
 
   auto &srcBlock = getRegion().front();
   Region &region = scfFor.getRegion();
-  BlockAndValueMapping bvm;
+  IRMapping bvm;
   {
     OpBuilder::InsertionGuard guard(b);
     auto &block = region.front();
@@ -584,7 +568,7 @@ LogicalResult SortOp::generateScalarImplementation(OpBuilder &b, Location loc,
   OpBuilder::InsertionGuard g(b);
   b.setInsertionPointToEnd(&region.front());
   b.create<scf::IfOp>(
-      loc, TypeRange{}, cond,
+      loc, cond,
       [&](OpBuilder &b, Location loc) {
         // Do not swap the pairs if true.
         b.create<scf::YieldOp>(loc);
@@ -972,7 +956,7 @@ LogicalResult ScanOp::generateScalarImplementation(OpBuilder &b, Location loc,
   }
 
   auto scfIf = b.create<scf::IfOp>(
-      loc, TypeRange{}, cond,
+      loc, cond,
       [&](OpBuilder &b, Location loc) {
         if (isInclusive) {
           auto value = b.create<memref::LoadOp>(loc, input(), indices);
@@ -1000,7 +984,7 @@ LogicalResult ScanOp::generateScalarImplementation(OpBuilder &b, Location loc,
 
   auto &srcBlock = getRegion().front();
   Region &region = scfIf.getElseRegion();
-  BlockAndValueMapping bvm;
+  IRMapping bvm;
   {
     OpBuilder::InsertionGuard guard(b);
     auto &block = region.front();
@@ -1085,8 +1069,7 @@ LogicalResult ScanOp::getResultTilePosition(
   return failure();
 }
 
-LogicalResult ScanOp::fold(ArrayRef<Attribute>,
-                           SmallVectorImpl<OpFoldResult> &) {
+LogicalResult ScanOp::fold(FoldAdaptor, SmallVectorImpl<OpFoldResult> &) {
   return memref::foldMemRefCast(*this);
 }
 
@@ -1286,13 +1269,11 @@ LogicalResult TopkOp::verify() {
   // Input indicies and values must have the same shape.
   if (auto inputIndices = indices()) {
     auto inputIndicesType = inputIndices->getType().cast<ShapedType>();
-    if (!areShapesCompatible(inputValuesType.getShape(),
-                             inputIndicesType.getShape()))
+    if (failed(verifyCompatibleShape(inputValuesType, inputIndicesType)))
       return op->emitOpError("input indices/values shape must match");
   }
   // Output indicies and values must have the same shape.
-  if (!areShapesCompatible(outputValuesType.getShape(),
-                           outputIndicesType.getShape()))
+  if (failed(verifyCompatibleShape(outputValuesType, outputIndicesType)))
     return op->emitOpError("output indices/values shape must match");
   // Input shape must match the output shape except for the dimension()
   uint64_t dim = getDimension();
@@ -1303,8 +1284,8 @@ LogicalResult TopkOp::verify() {
                         return true;
                       }
                       std::tuple<int64_t, int64_t> s = e.value();
-                      return isShapedTypeDimCompatible(std::get<0>(s),
-                                                       std::get<1>(s));
+                      return succeeded(verifyCompatibleShape(std::get<0>(s),
+                                                             std::get<1>(s)));
                     })) {
     return op->emitOpError("incompatible input/output shapes");
   }
@@ -1392,8 +1373,8 @@ LogicalResult TopkOp::generateScalarImplementation(OpBuilder &b, Location loc,
 
   // Retrieve region as black box comparision function f(x,y). Plug into op.
   auto &srcBlock = getRegion().front();
-  BlockAndValueMapping bvmF; // f(x,y)
-  BlockAndValueMapping bvmR; // f(y,x)
+  IRMapping bvmF; // f(x,y)
+  IRMapping bvmR; // f(y,x)
   {
     // Save previous insertion point. Continue within loop body.
     OpBuilder::InsertionGuard guard(b);
@@ -1704,7 +1685,11 @@ void PackOp::build(OpBuilder &builder, OperationState &state, Value source,
   SmallVector<int64_t> staticTileSizes;
   SmallVector<Value> dynamicTileSizes;
   dispatchIndexOpFoldResults(innerTiles, dynamicTileSizes, staticTileSizes);
-  build(builder, state, output.getType(), source, output,
+  SmallVector<Type> resultType;
+  auto outputType = output.getType();
+  if (outputType.isa<RankedTensorType>())
+    resultType.push_back(outputType);
+  build(builder, state, resultType, source, output,
         outerDimsPerm.empty() ? nullptr
                               : builder.getDenseI64ArrayAttr(outerDimsPerm),
         builder.getDenseI64ArrayAttr(innerDimsPos), dynamicTileSizes,
@@ -1919,7 +1904,7 @@ static void generatePackOpScalarImplementationBody(PackOp packOp,
     }
     scalar = builder
                  .create<scf::IfOp>(
-                     loc, packOp.getElementType(), isInBounds, /*thenBuilder=*/
+                     loc, isInBounds, /*thenBuilder=*/
                      [&](OpBuilder &b, Location l) {
                        b.create<scf::YieldOp>(l, createLoad());
                      },
@@ -2126,7 +2111,11 @@ void UnPackOp::build(OpBuilder &builder, OperationState &state, Value source,
   SmallVector<int64_t> staticTileSizes;
   SmallVector<Value> dynamicTileSizes;
   dispatchIndexOpFoldResults(innerTiles, dynamicTileSizes, staticTileSizes);
-  build(builder, state, output.getType(), source, output,
+  SmallVector<Type> resultType;
+  auto outputType = output.getType();
+  if (outputType.isa<RankedTensorType>())
+    resultType.push_back(outputType);
+  build(builder, state, resultType, source, output,
         outerDimsPerm.empty() ? nullptr
                               : builder.getDenseI64ArrayAttr(outerDimsPerm),
         builder.getDenseI64ArrayAttr(innerDimsPos), dynamicTileSizes,
@@ -2217,19 +2206,6 @@ SmallVector<Operation *>
 UnPackOp::getTiledImplementation(OpBuilder &builder,
                                  ArrayRef<OpFoldResult> offsets,
                                  ArrayRef<OpFoldResult> sizes) {
-  Operation *unpackOp = *this;
-  // Dynamic inner tile sizes currently trigger infinite application of
-  // tile-and-distribute on the unpack op, each tile calling
-  // getTiledImplementation -> getSlice creating more and more extract_slice.
-  // As a temporary work-around, we annotate unpack ops with a custom
-  // already_tiled attribute to keep track of what's already been tiled.
-  // For some reason this causes errors in non-dynamic-shape cases, but it's
-  // not needed there anyway, so we simply check for dynamic inner tiles before
-  // applying this tweak.
-  if (ShapedType::isDynamicShape(getStaticInnerTiles())) {
-    if (unpackOp->hasAttr("already_tiled"))
-      return {unpackOp};
-  }
   // TODO(hanchung): Extend it to handle memref version.
   // Tiling on buffers needs extra buffer because tiled unpack op could produce
   // more data for incomplete tiles. Tiling on tensors satisfies IREE's needs.
@@ -2332,9 +2308,13 @@ UnPackOp::getTiledImplementation(OpBuilder &builder,
       AffineExpr i, tile;
       bindDims(builder.getContext(), i);
       bindSymbols(builder.getContext(), tile);
-      OpFoldResult size = makeComposedFoldedAffineApply(
-          builder, loc, i * tile,
-          ArrayRef<OpFoldResult>{inputSizes.back(), dimAndTileMapping[dim]});
+      // Do not create an Affine ops for output size because the affine op is
+      // too complicated which would trigger an issue in affine ops
+      // simplification.
+      OpFoldResult size = builder.createOrFold<arith::MulIOp>(
+          loc, getValueOrCreateConstantIndexOp(builder, loc, inputSizes.back()),
+          getValueOrCreateConstantIndexOp(builder, loc,
+                                          dimAndTileMapping[dim]));
       outputExpandedSizes.push_back(size);
     }
   }
@@ -2381,8 +2361,6 @@ UnPackOp::getTiledImplementation(OpBuilder &builder,
 
   Operation *tiledUnpackOp =
       mlir::clone(builder, getOperation(), tiledResultTypes, tiledOperands);
-  tiledUnpackOp->setAttr(StringAttr::get(getContext(), "already_tiled"),
-                         BoolAttr::get(getContext(), true));
 
   if (isPerfectTilingCase)
     return {tiledUnpackOp};
@@ -2484,7 +2462,7 @@ LogicalResult WinogradInputTransformOp::verify() {
   if (isNchw()) {
     permute<Permutation::TTNCHW_TO_TTNHWC>(expectedOutputShape);
   }
-  if (!areShapesCompatible(expectedOutputShape, outputShape)) {
+  if (failed(verifyCompatibleShape(expectedOutputShape, outputShape))) {
     return op->emitOpError("incompatible output shape");
   }
   return success();
@@ -2583,7 +2561,7 @@ LogicalResult WinogradInputTransformOp::getResultTilePosition(
   return failure();
 }
 
-LogicalResult WinogradInputTransformOp::fold(ArrayRef<Attribute>,
+LogicalResult WinogradInputTransformOp::fold(FoldAdaptor,
                                              SmallVectorImpl<OpFoldResult> &) {
   return memref::foldMemRefCast(*this);
 }
@@ -2646,7 +2624,7 @@ LogicalResult WinogradOutputTransformOp::verify() {
       expectedOutputShape[outputIndex] = outputTileSize * inputShape[i];
     }
   }
-  if (!areShapesCompatible(expectedOutputShape, outputShape)) {
+  if (failed(verifyCompatibleShape(expectedOutputShape, outputShape))) {
     return op->emitOpError("incompatible output shape");
   }
   return success();
@@ -2745,12 +2723,230 @@ LogicalResult WinogradOutputTransformOp::getResultTilePosition(
   return failure();
 }
 
-LogicalResult WinogradOutputTransformOp::fold(ArrayRef<Attribute>,
+LogicalResult WinogradOutputTransformOp::fold(FoldAdaptor,
                                               SmallVectorImpl<OpFoldResult> &) {
   return memref::foldMemRefCast(*this);
 }
 
 LogicalResult WinogradOutputTransformOp::reifyResultShapes(
+    OpBuilder &b, ReifiedRankedShapedTypeDims &reifiedReturnShapes) {
+  return cast<LinalgExtOp>(getOperation())
+      .reifyResultShapes(b, reifiedReturnShapes);
+}
+
+//===----------------------------------------------------------------------===//
+// SoftmaxOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult SoftmaxOp::verify() {
+  Operation *op = getOperation();
+  auto inputType = input().getType().cast<ShapedType>();
+  auto outputType = output().getType().cast<ShapedType>();
+  ArrayRef<int64_t> inputShape = inputType.getShape();
+  ArrayRef<int64_t> outputShape = outputType.getShape();
+  if (failed(verifyCompatibleShape(inputShape, outputShape))) {
+    return op->emitOpError("incompatible output shape");
+  }
+  int64_t inputRank = getInputOperandRank();
+  int64_t dimension = getDimension();
+  if ((dimension < 0) || (dimension >= inputRank)) {
+    return op->emitOpError("incorrect dimension specified");
+  }
+  return success();
+}
+
+SmallVector<Range> SoftmaxOp::getIterationDomain(OpBuilder &builder) {
+  int64_t operandRank = getInputOperandRank();
+  SmallVector<Range> loopBounds(operandRank);
+  Location loc = getLoc();
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+  Value source = input();
+  for (auto dim : llvm::seq<int64_t>(0, operandRank)) {
+    loopBounds[dim].offset = zero;
+    loopBounds[dim].size = getDimValue(builder, loc, source, dim);
+    loopBounds[dim].stride = one;
+  }
+  return loopBounds;
+}
+
+SmallVector<utils::IteratorType> SoftmaxOp::getLoopIteratorTypes() {
+  SmallVector<utils::IteratorType> iteratorTypes(getInputOperandRank(),
+                                                 utils::IteratorType::parallel);
+  iteratorTypes[getDimension()] = utils::IteratorType::reduction;
+  return iteratorTypes;
+}
+
+SmallVector<Operation *>
+SoftmaxOp::getTiledImplementation(OpBuilder &builder,
+                                  ArrayRef<OpFoldResult> offsets,
+                                  ArrayRef<OpFoldResult> sizes) {
+  int64_t rank = getInputOperandRank();
+  auto oneAttr = builder.getI64IntegerAttr(1);
+  SmallVector<OpFoldResult> strides(rank, oneAttr);
+  SmallVector<Value> tiledOperands;
+  tiledOperands.emplace_back(
+      getSlice(builder, getLoc(), input(), offsets, sizes, strides));
+  tiledOperands.emplace_back(
+      getSlice(builder, getLoc(), getOutputs()[0], offsets, sizes, strides));
+
+  SmallVector<Type, 4> resultTypes;
+  if (hasTensorSemantics()) {
+    resultTypes.push_back(tiledOperands[1].getType());
+  }
+  Operation *tiledOp =
+      mlir::clone(builder, getOperation(), resultTypes, tiledOperands);
+
+  return {tiledOp};
+}
+
+LogicalResult SoftmaxOp::getResultTilePosition(
+    OpBuilder &builder, unsigned resultNumber, ArrayRef<OpFoldResult> offsets,
+    ArrayRef<OpFoldResult> sizes, SmallVector<OpFoldResult> &resultOffsets,
+    SmallVector<OpFoldResult> &resultSizes) {
+  if (resultNumber == 0) {
+    resultOffsets.assign(offsets.begin(), offsets.end());
+    resultSizes.assign(sizes.begin(), sizes.end());
+    return success();
+  }
+  return failure();
+}
+
+LogicalResult SoftmaxOp::fold(FoldAdaptor, SmallVectorImpl<OpFoldResult> &) {
+  return memref::foldMemRefCast(*this);
+}
+
+LogicalResult
+SoftmaxOp::reifyResultShapes(OpBuilder &b,
+                             ReifiedRankedShapedTypeDims &reifiedReturnShapes) {
+  return cast<LinalgExtOp>(getOperation())
+      .reifyResultShapes(b, reifiedReturnShapes);
+}
+
+void SoftmaxOp::build(OpBuilder &builder, OperationState &state, Value source,
+                      Value output, int64_t dimension) {
+  build(builder, state, TypeRange({output.getType()}), ValueRange(source),
+        ValueRange(output), dimension);
+}
+
+//===----------------------------------------------------------------------===//
+// AttentionOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult AttentionOp::verify() {
+  Operation *op = getOperation();
+  ShapedType queryType = getQueryType();
+  ShapedType keyType = getKeyType();
+  ShapedType valueType = getValueType();
+  ShapedType outputType = getOutputType();
+  ArrayRef<int64_t> queryShape = queryType.getShape();
+  ArrayRef<int64_t> keyShape = keyType.getShape();
+  ArrayRef<int64_t> valueShape = valueType.getShape();
+  ArrayRef<int64_t> outputShape = outputType.getShape();
+  if (failed(verifyCompatibleShape(queryShape, keyShape)))
+    return op->emitOpError("incompatible key shape");
+  if (failed(verifyCompatibleShape(queryShape, valueShape)))
+    return op->emitOpError("incompatible value shape");
+  if (failed(verifyCompatibleShape(queryShape, outputShape)))
+    return op->emitOpError("incompatible output shape");
+  return success();
+}
+
+SmallVector<Range> AttentionOp::getIterationDomain(OpBuilder &builder) {
+  int64_t iterationDomainRank = getIterationDomainRank();
+  SmallVector<Range> loopBounds(iterationDomainRank);
+  Location loc = getLoc();
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+  Value source = getQuery();
+  for (auto dim : llvm::seq<int64_t>(0, iterationDomainRank)) {
+    loopBounds[dim].offset = zero;
+    loopBounds[dim].size = getDimValue(builder, loc, source, dim);
+    loopBounds[dim].stride = one;
+  }
+  return loopBounds;
+}
+
+SmallVector<utils::IteratorType> AttentionOp::getLoopIteratorTypes() {
+  SmallVector<utils::IteratorType> iteratorTypes(getIterationDomainRank(),
+                                                 utils::IteratorType::parallel);
+  return iteratorTypes;
+}
+
+SmallVector<Operation *>
+AttentionOp::getTiledImplementation(OpBuilder &builder,
+                                    ArrayRef<OpFoldResult> offsets,
+                                    ArrayRef<OpFoldResult> sizes) {
+  assert(offsets.size() == getIterationDomainRank());
+  assert(sizes.size() == getIterationDomainRank());
+
+  Location loc = getLoc();
+  auto one = builder.getIndexAttr(1);
+  auto zero = builder.getIndexAttr(0);
+
+  SmallVector<OpFoldResult> queryOutputOffsets(getQueryRank(), zero);
+  SmallVector<OpFoldResult> queryOutputStrides(getQueryRank(), one);
+  ArrayRef<int64_t> queryShape = getQueryType().getShape();
+  SmallVector<OpFoldResult> queryOutputSizes =
+      getAsOpFoldResult(builder.getIndexArrayAttr(queryShape));
+  for (auto info : llvm::enumerate(llvm::zip(offsets, sizes))) {
+    queryOutputOffsets[info.index()] = std::get<0>(info.value());
+    queryOutputSizes[info.index()] = std::get<1>(info.value());
+  }
+
+  SmallVector<OpFoldResult> keyValueOffsets(getKeyRank(), zero);
+  SmallVector<OpFoldResult> keyValueStrides(getKeyRank(), one);
+  ArrayRef<int64_t> keyShape = getKeyType().getShape();
+  SmallVector<OpFoldResult> keyValueSizes =
+      getAsOpFoldResult(builder.getIndexArrayAttr(keyShape));
+  keyValueSizes[0] = sizes[0];
+  keyValueOffsets[0] = offsets[0];
+
+  SmallVector<Value> tiledOperands;
+  tiledOperands.emplace_back(getSlice(builder, loc, getQuery(),
+                                      queryOutputOffsets, queryOutputSizes,
+                                      queryOutputStrides));
+  tiledOperands.emplace_back(getSlice(builder, loc, getKey(), keyValueOffsets,
+                                      keyValueSizes, keyValueStrides));
+  tiledOperands.emplace_back(getSlice(builder, loc, getValue(), keyValueOffsets,
+                                      keyValueSizes, keyValueStrides));
+  tiledOperands.emplace_back(getSlice(builder, loc, getOutput(),
+                                      queryOutputOffsets, queryOutputSizes,
+                                      queryOutputStrides));
+
+  SmallVector<Type> resultTypes;
+  if (hasTensorSemantics())
+    resultTypes.push_back(tiledOperands[3].getType());
+
+  Operation *tiledOp =
+      mlir::clone(builder, getOperation(), resultTypes, tiledOperands);
+
+  return {tiledOp};
+}
+
+LogicalResult AttentionOp::getResultTilePosition(
+    OpBuilder &builder, unsigned resultNumber, ArrayRef<OpFoldResult> offsets,
+    ArrayRef<OpFoldResult> sizes, SmallVector<OpFoldResult> &resultOffsets,
+    SmallVector<OpFoldResult> &resultSizes) {
+  if (resultNumber == 0) {
+    ArrayRef<int64_t> resultShape = getOutputType().getShape();
+    resultSizes = getAsOpFoldResult(builder.getIndexArrayAttr(resultShape));
+    resultOffsets =
+        SmallVector<OpFoldResult>(getOutputRank(), builder.getIndexAttr(0));
+    for (auto info : llvm::enumerate(llvm::zip(offsets, sizes))) {
+      resultOffsets[info.index()] = std::get<0>(info.value());
+      resultSizes[info.index()] = std::get<1>(info.value());
+    }
+    return success();
+  }
+  return failure();
+}
+
+LogicalResult AttentionOp::fold(FoldAdaptor, SmallVectorImpl<OpFoldResult> &) {
+  return memref::foldMemRefCast(*this);
+}
+
+LogicalResult AttentionOp::reifyResultShapes(
     OpBuilder &b, ReifiedRankedShapedTypeDims &reifiedReturnShapes) {
   return cast<LinalgExtOp>(getOperation())
       .reifyResultShapes(b, reifiedReturnShapes);
@@ -2776,6 +2972,8 @@ DEFINE_OP_GET_EFFECTS(PackOp)
 DEFINE_OP_GET_EFFECTS(UnPackOp)
 DEFINE_OP_GET_EFFECTS(WinogradInputTransformOp)
 DEFINE_OP_GET_EFFECTS(WinogradOutputTransformOp)
+DEFINE_OP_GET_EFFECTS(SoftmaxOp)
+DEFINE_OP_GET_EFFECTS(AttentionOp)
 
 //===----------------------------------------------------------------------===//
 // iree_linalg_ext.set_encoding
@@ -2803,8 +3001,7 @@ LogicalResult SetEncodingOp::verify() {
   // The source and result must have the same rank.
   if (getResultType().getRank() != getSourceType().getRank())
     return emitOpError("cannot change the rank of the tensor");
-  if (!areShapesCompatible(getResultType().getShape(),
-                           getSourceType().getShape()))
+  if (failed(verifyCompatibleShape(getResultType(), getSourceType())))
     return emitOpError("expected to preserve the logical shape of the tensor");
   return success();
 }
@@ -2843,8 +3040,7 @@ LogicalResult UnsetEncodingOp::verify() {
   // The source and result must have the same rank.
   if (getResultType().getRank() != getSourceType().getRank())
     return emitOpError("cannot change the rank of the tensor");
-  if (!areShapesCompatible(getResultType().getShape(),
-                           getSourceType().getShape()))
+  if (failed(verifyCompatibleShape(getResultType(), getSourceType())))
     return emitOpError("expected to preserve the logical shape of the tensor");
   return success();
 }

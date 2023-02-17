@@ -25,6 +25,25 @@
 namespace mlir {
 namespace iree_compiler {
 
+LogicalResult verifyLLVMConversionCompatibility(ModuleOp moduleOp) {
+  LogicalResult compatible = success();
+
+  moduleOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
+    auto memrefType = subspanOp.getType().dyn_cast<MemRefType>();
+    if (memrefType) {
+      Type elType = memrefType.getElementType();
+      if (!elType.isa<FloatType, IntegerType>()) {
+        subspanOp.emitError()
+            << "only integer and floating point element types "
+               "are supported at interface boundary";
+        compatible = failure();
+      }
+    }
+  });
+
+  return compatible;
+}
+
 void ConvertToDynamicSharedMemory(ModuleOp moduleOp) {
   SymbolTableCollection symbolTableCollection;
   // Collect all the adressOfOps to static shared memory globals.
@@ -135,7 +154,12 @@ struct ConvertSharedMemAllocOp : public OpRewritePattern<memref::AllocOp> {
 
   LogicalResult matchAndRewrite(memref::AllocOp allocOp,
                                 PatternRewriter &rewriter) const override {
-    if (allocOp.getType().getMemorySpaceAsInt() != 3) return failure();
+    auto addressSpace = allocOp.getType()
+                            .getMemorySpace()
+                            .dyn_cast_or_null<gpu::AddressSpaceAttr>();
+    if (!addressSpace ||
+        addressSpace.getValue() != gpu::GPUDialect::getWorkgroupAddressSpace())
+      return failure();
     ArrayRef<int64_t> shape = allocOp.getType().getShape();
     if (llvm::any_of(shape,
                      [](int64_t dim) { return dim == ShapedType::kDynamic; })) {
@@ -247,8 +271,7 @@ class ConvertFunc : public ConvertToLLVMPattern {
     funcOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
       auto memrefType = subspanOp.getType().cast<MemRefType>();
       Type elType = memrefType.getElementType();
-      auto llvmType =
-          LLVM::LLVMPointerType::get(elType, memrefType.getMemorySpaceAsInt());
+      auto llvmType = LLVM::LLVMPointerType::get(elType);
       llvmInputTypes[argMapping[SetBinding(subspanOp.getSet(),
                                            subspanOp.getBinding())]] = llvmType;
     });
@@ -302,6 +325,26 @@ class ConvertIREEBindingSubspanOp : public ConvertToLLVMPattern {
       : ConvertToLLVMPattern(
             IREE::HAL::InterfaceBindingSubspanOp::getOperationName(), context,
             converter) {}
+
+  /// Checks all subspanOps with the same binding has readonly attribute
+  static bool checkAllSubspansReadonly(LLVM::LLVMFuncOp llvmFuncOp,
+                                       APInt binding) {
+    bool allReadOnly = false;
+    llvmFuncOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp op) {
+      if (op.getBinding() == binding) {
+        if (!bitEnumContainsAny(op.getDescriptorFlags().value_or(
+                                    IREE::HAL::DescriptorFlags::None),
+                                IREE::HAL::DescriptorFlags::ReadOnly)) {
+          allReadOnly = false;
+          return WalkResult::interrupt();
+        }
+        allReadOnly = true;
+      }
+      return WalkResult::advance();
+    });
+    return allReadOnly;
+  }
+
   LogicalResult matchAndRewrite(
       Operation *op, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
@@ -324,6 +367,18 @@ class ConvertIREEBindingSubspanOp : public ConvertToLLVMPattern {
     llvmFuncOp.setArgAttr(llvmBufferArg.getArgNumber(),
                           LLVM::LLVMDialect::getAlignAttrName(),
                           rewriter.getI32IntegerAttr(16));
+    // It is safe to set the noalias attribute as it is guaranteed that the
+    // ranges within bindings won't alias.
+    llvmFuncOp.setArgAttr(llvmBufferArg.getArgNumber(),
+                          LLVM::LLVMDialect::getNoAliasAttrName(),
+                          rewriter.getUnitAttr());
+    if (checkAllSubspansReadonly(llvmFuncOp, subspanOp.getBinding())) {
+      // Setting the readonly attribute here will generate non-coherent cache
+      // loads.
+      llvmFuncOp.setArgAttr(llvmBufferArg.getArgNumber(),
+                            LLVM::LLVMDialect::getReadonlyAttrName(),
+                            rewriter.getUnitAttr());
+    }
     // Add the byte offset.
     Value llvmBufferBasei8Ptr = rewriter.create<LLVM::BitcastOp>(
         loc,
@@ -337,8 +392,7 @@ class ConvertIREEBindingSubspanOp : public ConvertToLLVMPattern {
           loc, llvmBufferBasei8Ptr.getType(), llvmBufferBasei8Ptr,
           adaptor.getByteOffset());
     }
-    auto llvmPtrType = LLVM::LLVMPointerType::get(
-        memrefType.getElementType(), memrefType.getMemorySpaceAsInt());
+    auto llvmPtrType = LLVM::LLVMPointerType::get(memrefType.getElementType());
     Value llvmBufferBasePtr =
         rewriter.create<LLVM::BitcastOp>(loc, llvmPtrType, llvmBufferBasei8Ptr);
     if (memrefType.hasStaticShape()) {
@@ -466,6 +520,21 @@ void populateLowerHALInterfaceOp(RewritePatternSet &patterns) {
 
 std::unique_ptr<OperationPass<ModuleOp>> createTestLLVMGPULegalizePass() {
   return std::make_unique<TestLLVMGPULegalizeOpPass>();
+}
+
+static IntegerAttr wrapNumericMemorySpace(MLIRContext *ctx, unsigned space) {
+  return IntegerAttr::get(IntegerType::get(ctx, 64), space);
+}
+
+void populateGpuMemorySpaceAttributeConversions(
+    TypeConverter &typeConverter, const MemorySpaceMapping &mapping) {
+  typeConverter.addTypeAttributeConversion(
+      [mapping](BaseMemRefType type, gpu::AddressSpaceAttr memorySpaceAttr) {
+        gpu::AddressSpace memorySpace = memorySpaceAttr.getValue();
+        unsigned addressSpace = mapping(memorySpace);
+        return wrapNumericMemorySpace(memorySpaceAttr.getContext(),
+                                      addressSpace);
+      });
 }
 
 }  // namespace iree_compiler

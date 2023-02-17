@@ -25,3 +25,17 @@ iree_runtime_cc_library(
         "pack_arm_64.h",
     ],
 )
+
+iree_runtime_cc_library(
+    name = "query_tile_sizes_arm_64",
+    hdrs = [
+        "query_tile_sizes_arm_64.h",
+    ],
+)
+
+iree_runtime_cc_library(
+    name = "unpack_arm_64",
+    hdrs = [
+        "unpack_arm_64.h",
+    ],
+)

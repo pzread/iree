@@ -195,12 +195,9 @@ static LogicalResult analysePadTensorOp(tensor::PadOp padTensorOp,
 
 /// For every result of the LinalgOp, gets the operands (`ins` or `outs`) whose
 /// buffer can be reused for the result.
-template <typename OpType>
-static SmallVector<Value> getTiedOperandsForLinalgOps(
-    OpType linalgOp, const BufferizationPlan &plan) {
-  auto dpsOp = dyn_cast<DestinationStyleOpInterface>(linalgOp.getOperation());
-  if (!dpsOp) return {};
-  SmallVector<Value> tiedOperands(linalgOp.getOperation()->getNumResults());
+static SmallVector<Value> getTiedOperandsForDPSOps(
+    DestinationStyleOpInterface dpsOp, const BufferizationPlan &plan) {
+  SmallVector<Value> tiedOperands(dpsOp.getOperation()->getNumResults());
   auto outputOperands = dpsOp.getDpsInitOperands();
   for (auto [index, outTensor] : llvm::enumerate(outputOperands)) {
     // If the `outs` tensor has a single use (this op) and is not from a
@@ -215,14 +212,11 @@ static SmallVector<Value> getTiedOperandsForLinalgOps(
 
 /// Adds the corresponding `outs` and result tensors of the linalg op into the
 /// same equivalence class.
-template <typename OpType>
-static LogicalResult analyseLinalgOps(OpType linalgOp,
-                                      BufferizationPlan &plan) {
-  auto dpsOp = dyn_cast<DestinationStyleOpInterface>(linalgOp.getOperation());
-  if (!dpsOp) return failure();
+static LogicalResult analyseDPSOps(DestinationStyleOpInterface dpsOp,
+                                   BufferizationPlan &plan) {
   if (!dpsOp.hasTensorSemantics()) return success();
-  auto results = linalgOp->getResults();
-  auto tiedOperands = getTiedOperandsForLinalgOps(linalgOp, plan);
+  auto results = dpsOp->getResults();
+  auto tiedOperands = getTiedOperandsForDPSOps(dpsOp, plan);
   if (tiedOperands.empty()) return failure();
   for (auto [index, resultTensor, tiedOperand] : llvm::zip_equal(
            llvm::seq<int64_t>(0, results.size()), results, tiedOperands)) {
@@ -474,7 +468,12 @@ void BufferizationPlan::dump() {
   for (auto it = mappedTensors.begin(), ie = mappedTensors.end(); it != ie;
        ++it) {
     if (!it->isLeader()) continue;
-    llvm::dbgs() << "\tSet " << numSets << ":\n";
+    llvm::dbgs() << "\tSet " << numSets;
+    if (storeLeaders.count(
+            getLeaderValue(getValue(*mappedTensors.member_begin(it))))) {
+      llvm::dbgs() << "(StoreSet) ";
+    }
+    llvm::dbgs() << ":\n";
     for (auto member : llvm::make_range(mappedTensors.member_begin(it),
                                         mappedTensors.member_end())) {
       llvm::dbgs() << "\t\t";
@@ -482,6 +481,11 @@ void BufferizationPlan::dump() {
       llvm::dbgs() << "\n";
     }
     numSets++;
+  }
+  llvm::dbgs() << "StoreLeaders : \n";
+  for (auto storeLeader : storeLeaders) {
+    storeLeader.print(llvm::dbgs());
+    llvm::dbgs() << "\n";
   }
 }
 
@@ -507,12 +511,9 @@ LogicalResult createTensorEquivalenceClasses(func::FuncOp funcOp,
         .Case<tensor::PadOp>([&](tensor::PadOp padTensorOp) {
           return analysePadTensorOp(padTensorOp, plan);
         })
-        .Case<linalg::LinalgOp>([&](linalg::LinalgOp linalgOp) {
-          return analyseLinalgOps(linalgOp, plan);
-        })
-        .Case<IREE::LinalgExt::LinalgExtOp>(
-            [&](IREE::LinalgExt::LinalgExtOp linalgExtOp) {
-              return analyseLinalgOps(linalgExtOp, plan);
+        .Case<DestinationStyleOpInterface>(
+            [&](DestinationStyleOpInterface dpsOp) {
+              return analyseDPSOps(dpsOp, plan);
             })
         .Case<tensor::CollapseShapeOp, tensor::ExpandShapeOp>(
             [&](auto reshapeOp) {
@@ -559,7 +560,8 @@ LogicalResult createTensorEquivalenceClasses(func::FuncOp funcOp,
         .Case<scf::ForOp>(
             [&](scf::ForOp forOp) { return analyseScfForOp(forOp, plan); })
         .Case<scf::YieldOp, tensor::EmptyOp, tensor::DimOp, tensor::ExtractOp,
-              tensor::PadOp, bufferization::ToMemrefOp>(
+              tensor::PadOp, bufferization::ToMemrefOp,
+              bufferization::AllocTensorOp>(
             [&](Operation *op) { return success(); })
         .Default([&](Operation *op) -> LogicalResult {
           if (llvm::any_of(op->getOperands(),
@@ -597,16 +599,6 @@ LogicalResult createTensorEquivalenceClasses(func::FuncOp funcOp,
     plan.dump();
   });
 
-  // Tie operands to allow for operand fusion support. To be dropped once the
-  // operand fusion is generalized in IREE.
-  funcOp.walk([&](linalg::LinalgOp linalgOp) {
-    return tieOperandsForOperandFusion(linalgOp, plan);
-  });
-  DEBUG_WITH_TYPE(DEBUG_TYPE, {
-    llvm::dbgs() << "After union for supporting operand fusion";
-    plan.dump();
-  });
-
   if (funcOp
           .walk([&](IREE::Flow::DispatchTensorStoreOp storeOp) -> WalkResult {
             return analyseInterfaceStoreTensorOp(storeOp, plan);
@@ -614,6 +606,11 @@ LogicalResult createTensorEquivalenceClasses(func::FuncOp funcOp,
           .wasInterrupted()) {
     return failure();
   }
+
+  DEBUG_WITH_TYPE(DEBUG_TYPE, {
+    llvm::dbgs() << "After Store walk ";
+    plan.dump();
+  });
 
   return success();
 }

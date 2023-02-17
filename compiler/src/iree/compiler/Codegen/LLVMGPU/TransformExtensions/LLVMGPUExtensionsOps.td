@@ -10,6 +10,7 @@
 include "mlir/Dialect/PDL/IR/PDLTypes.td"
 include "mlir/Dialect/Transform/IR/TransformDialect.td"
 include "mlir/Dialect/Transform/IR/TransformInterfaces.td"
+include "mlir/Dialect/Transform/IR/TransformTypes.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/IR/OpBase.td"
 
@@ -154,7 +155,7 @@ def VectorToWarpExecuteOnLane0Op : Op<Transform_Dialect, "iree.vector.to_warp_ex
       func.func @foo() {
         %c0 = arith.constant 0 : index
         %c1 = arith.constant 1 : index
-        %0 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) offset(%c0) alignment(64) : memref<128xf32>
+        %0 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : memref<128xf32>
         %1 = gpu.thread_id  x
         %2 = arith.cmpi ult, %1, %c1 : index
         scf.if %2 {
@@ -175,7 +176,7 @@ def VectorToWarpExecuteOnLane0Op : Op<Transform_Dialect, "iree.vector.to_warp_ex
         %c4 = arith.constant 4 : index
         %c32 = arith.constant 32 : index
         %cst = arith.constant dense<1.000000e+00> : vector<128xf32>
-        %0 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) offset(%c0) alignment(64) : memref<128xf32>
+        %0 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : memref<128xf32>
         %1 = gpu.thread_id  x
         %2 = arith.cmpi ult, %1, %c32 : index
         // Single-warp guard filters out threads 32-63.
@@ -253,7 +254,7 @@ def VectorWarpDistributionOp : Op<Transform_Dialect, "iree.vector.warp_distribut
         %c4 = arith.constant 4 : index
         %c32 = arith.constant 32 : index
         %cst = arith.constant dense<1.000000e+00> : vector<128xf32>
-        %0 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) offset(%c0) alignment(64) : memref<128xf32>
+        %0 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : memref<128xf32>
         %1 = gpu.thread_id  x
         %2 = arith.cmpi ult, %1, %c32 : index
         // Single-warp guard filters out threads 32-63.
@@ -277,7 +278,7 @@ def VectorWarpDistributionOp : Op<Transform_Dialect, "iree.vector.warp_distribut
         %c4 = arith.constant 4 : index
         %c32 = arith.constant 32 : index
         %cst = arith.constant dense<1.000000e+00> : vector<128xf32>
-        %0 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) offset(%c0) alignment(64) : memref<128xf32>
+        %0 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : memref<128xf32>
         %1 = gpu.thread_id  x
         %2 = arith.cmpi ult, %1, %c32 : index
         // Single-warp guard filters out threads 32-63.
@@ -311,6 +312,155 @@ def VectorWarpDistributionOp : Op<Transform_Dialect, "iree.vector.warp_distribut
   let extraClassDeclaration = [{
     ::mlir::DiagnosedSilenceableFailure applyToOne(
         ::mlir::Operation *target,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
+}
+
+def VectorToMMAConversionOp : Op<Transform_Dialect, "iree.vector.vector_to_mma_conversion",
+    [FunctionalStyleTransformOpTrait,
+     MemoryEffectsOpInterface,
+     TransformEachOpTrait,
+     TransformOpInterface]> {
+  let description = [{
+    This converts slices of operations containing vector.contract op into
+    mma operations, targetting warp level tensorcore operations. If the vector
+    operations are bigger than the native mma size it will first split up those
+    vector operations.
+
+    #### Return modes
+
+    This transform consumes the target handle and produces a result handle.
+  }];
+
+  let arguments = (ins PDL_Operation:$target);
+  let results = (outs PDL_Operation:$result);
+
+  let assemblyFormat = "$target attr-dict";
+  let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
+
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins "Value":$target)>
+  ];
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::Operation *target,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
+}
+
+def PromoteOperandsOp :
+  Op<Transform_Dialect, "iree.promote_operands",
+    [FunctionalStyleTransformOpTrait,
+     MemoryEffectsOpInterface,
+     TransformEachOpTrait,
+     TransformOpInterface]> {
+  let description = [{
+    This op promotes the specified operands of the provided target handle.
+
+    #### Return modes
+    This op consume its target handle and returns a new handle to its target handle
+    as well as an allocTensorOp for each of the provided valid indices.
+
+    If the promotion of any specified operand fails to occur, the op definitely
+    fails.
+  }];
+
+  let arguments = (ins PDL_Operation:$target,
+                   DefaultValuedAttr<DenseI64ArrayAttr, "{}">:$indices);
+  let results = (outs Variadic<PDL_Operation>:$result);
+
+  let assemblyFormat = [{ $target $indices attr-dict `:` functional-type(operands, results)}];
+  let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
+
+  let builders = [
+    OpBuilder<(ins "Value":$target, "ArrayRef<int64_t>":$indices)>
+  ];
+
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::Operation *target,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
+}
+
+def PipelineSharedMemoryCopiesOp : Op<
+    Transform_Dialect, "iree.pipeline_shared_memory_copies", [
+      FunctionalStyleTransformOpTrait,
+      MemoryEffectsOpInterface,
+      TransformEachOpTrait,
+      TransformOpInterface]> {
+  let description = [{
+    This applies software pipelining to a given scf.for loop. The pipelining
+    strategy will look for a copy to shared memory and pipeline it to overlap
+    it with the rest of the loop. 
+    It is user responsability to ensure that there are no dependency between
+    `depth` iterations of the loop by using multi-buffering.
+
+    `depth` will indicate how many stages the software pipeline should have.
+    `peel_epilogue` allows to force the epilogue to be peeled out instead of
+    potentially using predicated operations for the epilogue phase.
+
+    #### Return modes
+    This transform consumes the scf.for handle and produces a result handle
+    which points to the new scf.for loop generated. It will fail if the loop
+    cannot be pipelined or if there are no shared memory copies.
+  }];
+
+  let arguments = (
+      ins Transform_ConcreteOpType<"scf.for">:$for_op,
+          I64Attr:$depth,
+          UnitAttr:$peel_epilogue);
+  let results = (outs Transform_ConcreteOpType<"scf.for">:$result);
+
+  let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
+
+  let assemblyFormat = [{ $for_op attr-dict `:` functional-type(operands, results)}];
+
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::scf::ForOp forOp,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
+}
+
+def CreateAsyncGroupsOp :
+  Op<Transform_Dialect, "iree.create_async_groups",
+    [FunctionalStyleTransformOpTrait,
+     MemoryEffectsOpInterface,
+     TransformEachOpTrait,
+     TransformOpInterface]> {
+  let description = [{
+    Convert copies to shared memory to async copies. This creates groups
+    of consecutive copies and emit wait operation right after.
+    The input operation is a `func.func`.
+
+    `use_mma_sync` specifies whether or not `bypassL1` attributes should be
+    added to the async copies.
+
+    #### Return modes
+    This op returns a handle to the transformed function, even if nothing
+    changed.
+  }];
+
+  let arguments = (ins PDL_Operation:$target,
+                   BoolAttr:$use_mma_sync);
+  let results = (outs Variadic<PDL_Operation>:$result);
+
+  let assemblyFormat = [{ $target attr-dict `:` functional-type(operands, results)}];
+  let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
+
+  let builders = [
+    OpBuilder<(ins "Value":$target, "bool":$use_mma_sync)>
+  ];
+
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::func::FuncOp target,
         ::mlir::transform::ApplyToEachResultList &results,
         ::mlir::transform::TransformState &state);
   }];

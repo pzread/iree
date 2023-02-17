@@ -242,7 +242,7 @@ struct FlattenBindingSubspan final
     auto newOp = rewriter.create<IREE::HAL::InterfaceBindingSubspanOp>(
         subspanOp.getLoc(), newType, subspanOp.getSet(), subspanOp.getBinding(),
         subspanOp.getDescriptorType(), subspanOp.getByteOffset(), dynamicDims,
-        subspanOp.getAlignmentAttr());
+        subspanOp.getAlignmentAttr(), subspanOp.getDescriptorFlagsAttr());
     if (isRankOneMemRef(oldType)) {
       rewriter.replaceOpWithNewOp<memref::CastOp>(subspanOp, oldType, newOp);
     } else {
@@ -661,7 +661,7 @@ struct FoldSubspanOffsetIntoLoadStore final : public OpRewritePattern<OpType> {
     Value newSubspan = rewriter.create<IREE::HAL::InterfaceBindingSubspanOp>(
         memref.getLoc(), subspanOp.getType(), subspanOp.getSet(),
         subspanOp.getBinding(), subspanOp.getDescriptorType(), zero,
-        subspanOp.getDynamicDims(), subspanOp.getAlignmentAttr());
+        subspanOp.getDynamicDims(), subspanOp.getAlignmentAttr(), nullptr);
     rewriter.restoreInsertionPoint(ip);
 
     MLIRContext *context = rewriter.getContext();
@@ -849,7 +849,7 @@ struct FlattenMemRefSubspanPass
     // Fold subviews if any new oportuinity has been created.
     RewritePatternSet foldSubviewPatterns(context);
     memref::populateFoldMemRefAliasOpPatterns(foldSubviewPatterns);
-    if (failed(applyPatternsAndFoldGreedily(getOperation()->getRegions(),
+    if (failed(applyPatternsAndFoldGreedily(getOperation(),
                                             std::move(foldSubviewPatterns)))) {
       return signalPassFailure();
     }

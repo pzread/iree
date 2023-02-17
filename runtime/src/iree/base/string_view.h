@@ -64,14 +64,15 @@ typedef struct iree_string_pair_t {
 
 // Returns an empty string pair ("", "").
 static inline iree_string_pair_t iree_string_pair_empty(void) {
-  iree_string_pair_t v = {iree_string_view_empty(), iree_string_view_empty()};
+  iree_string_pair_t v = {{iree_string_view_empty()},
+                          {iree_string_view_empty()}};
   return v;
 }
 
 // Returns a string pair with the given values.
 static inline iree_string_pair_t iree_make_string_pair(
     iree_string_view_t first, iree_string_view_t second) {
-  iree_string_pair_t v = {first, second};
+  iree_string_pair_t v = {{first}, {second}};
   return v;
 }
 
@@ -98,6 +99,10 @@ static inline iree_string_pair_t iree_make_cstring_pair(const char* first,
 // Returns true if the two strings are equal (compare == 0).
 IREE_API_EXPORT bool iree_string_view_equal(iree_string_view_t lhs,
                                             iree_string_view_t rhs);
+// Returns true if the two strings are equal (compare == 0) ignoring case.
+// Equivalent to strcasecmp.
+IREE_API_EXPORT bool iree_string_view_equal_case(iree_string_view_t lhs,
+                                                 iree_string_view_t rhs);
 
 // Like std::string::compare but with iree_string_view_t values.
 IREE_API_EXPORT int iree_string_view_compare(iree_string_view_t lhs,

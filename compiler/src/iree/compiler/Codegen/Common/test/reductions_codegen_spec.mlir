@@ -17,7 +17,7 @@ transform.structured.canonicalized_sequence failures(propagate) {
   %grid_loop, %outer_tiled = transform.structured.tile_to_foreach_thread_op %fusion_root_1 tile_sizes [1]
     ( mapping = [#gpu.block<x>] )
   
-  %func = transform.structured.match ops{["func.func"]} in %arg0
+  %func = transform.structured.match ops{["func.func"]} in %arg0 : (!pdl.operation) -> !pdl.operation
   %func_1 = transform.iree.apply_patterns %func { bubble_collapse_expand }
 
   // Excessively eager canonicalization results in `fill`s being "fused" due to
@@ -55,7 +55,7 @@ transform.structured.canonicalized_sequence failures(propagate) {
   
   // Step 3. Rank-reduce.
   // ===========================================================================
-  %func_2 = transform.iree.apply_patterns %func_1 { rank_reducing }
+  %func_2 = transform.iree.apply_patterns %func_1 {  rank_reducing_linalg, rank_reducing_vector }
 
   // We don't perform any following transformation (vectorization, bufferizaton,
   // mapping) because this schedule is applied to Linalg-only code without the

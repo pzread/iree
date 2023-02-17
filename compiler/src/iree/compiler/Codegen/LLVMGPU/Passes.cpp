@@ -17,6 +17,7 @@
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/Func/Transforms/Passes.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -44,8 +45,11 @@ static FailureOr<Value> gpuAllocationFn(OpBuilder &builder, Location loc,
                                         MemRefType memRefType,
                                         ValueRange dynamicSizes,
                                         unsigned alignment) {
-  MemRefType allocType = MemRefType::get(memRefType.getShape(),
-                                         memRefType.getElementType(), {}, 3);
+  auto workgroupSpace = gpu::AddressSpaceAttr::get(
+      builder.getContext(), gpu::GPUDialect::getWorkgroupAddressSpace());
+  MemRefType allocType =
+      MemRefType::get(memRefType.getShape(), memRefType.getElementType(),
+                      AffineMap(), workgroupSpace);
   return builder.create<memref::AllocOp>(loc, allocType, dynamicSizes)
       .getResult();
 }
@@ -61,11 +65,15 @@ static LogicalResult gpuCopyFn(OpBuilder &builder, Location loc, Value from,
   auto toType = to.getType().cast<MemRefType>();
 
   bool needsBarrier = false;
-  if (auto attr = fromType.getMemorySpace().dyn_cast_or_null<IntegerAttr>()) {
-    if (attr.getInt() == 3) needsBarrier = true;
+  if (auto attr =
+          fromType.getMemorySpace().dyn_cast_or_null<gpu::AddressSpaceAttr>()) {
+    if (attr.getValue() == gpu::GPUDialect::getWorkgroupAddressSpace())
+      needsBarrier = true;
   }
-  if (auto attr = toType.getMemorySpace().dyn_cast_or_null<IntegerAttr>()) {
-    if (attr.getInt() == 3) needsBarrier = true;
+  if (auto attr =
+          toType.getMemorySpace().dyn_cast_or_null<gpu::AddressSpaceAttr>()) {
+    if (attr.getValue() == gpu::GPUDialect::getWorkgroupAddressSpace())
+      needsBarrier = true;
   }
   if (needsBarrier) builder.create<gpu::BarrierOp>(loc);
   Operation *copy = builder.create<memref::CopyOp>(loc, from, to);
@@ -98,6 +106,8 @@ static void tileAndDistributeToWorkgroup(
   nestedModulePM.addNestedPass<func::FuncOp>(
       createConvertToDestinationPassingStylePass(
           useWARForCooperativeMatrixCodegen));
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      IREE::LinalgExt::createTileAndDecomposeAttentionPass());
   nestedModulePM.addPass(createCanonicalizerPass());
   nestedModulePM.addPass(createCSEPass());
 }
@@ -253,6 +263,8 @@ void addGPUMatmulTensorCorePassPipeline(OpPassManager &pm,
   // Vector -> MMA ops
   nestedModulePM.addNestedPass<func::FuncOp>(
       memref::createFoldMemRefAliasOpsPass());
+  nestedModulePM.addPass(createCanonicalizerPass());
+  nestedModulePM.addPass(createCSEPass());
   nestedModulePM.addNestedPass<func::FuncOp>(createLLVMGPUVectorToGPU());
   nestedModulePM.addPass(createCanonicalizerPass());
   nestedModulePM.addPass(createCSEPass());
@@ -398,7 +410,6 @@ static void addLowerToLLVMGPUPasses(OpPassManager &pm, bool useROCM) {
   pm.addNestedPass<func::FuncOp>(memref::createExpandOpsPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
   pm.addPass(createLowerAffinePass());
-
   // Strip out the debug info for the kernel as CUDA driver doesn't diggest PTX
   // debug info well.
   pm.addPass(createStripDebugInfoPass());
@@ -433,6 +444,11 @@ void addGPUTransformDialectPasses(OpPassManager &passManager) {
 void buildLLVMGPUTransformPassPipeline(OpPassManager &pm, bool useROCM) {
   pm.nest<ModuleOp>().nest<func::FuncOp>().addPass(createTypePropagationPass());
   pm.nest<ModuleOp>().addPass(createBufferizeCopyOnlyDispatchesPass());
+  pm.nest<ModuleOp>().addNestedPass<func::FuncOp>(
+      IREE::LinalgExt::createDecomposeSoftmaxPass());
+  // Temporary solution to avoid large allocations due to softmax lowering.
+  pm.nest<ModuleOp>().addNestedPass<func::FuncOp>(
+      createRematerializeParallelOpsPass());
   // TODO: Remove the following pass the plumb support for #hal.descriptor_type
   // memory space through the stack.
   pm.nest<ModuleOp>().addNestedPass<func::FuncOp>(

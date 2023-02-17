@@ -1855,6 +1855,9 @@ def HAL_ExecutableConstantBlockOp :
     // Placeholder attribute added to ops that look up constants by key.
     // Ordinal assignment passes use this to identify and update usage.
     static StringRef getKeyAttrName() { return "hal.executable.constant.key"; }
+
+    /// Make symbol optional as this op has no symbol.
+    bool isOptionalSymbol() { return true; }
   }];
 
   let hasCanonicalizer = 1;
@@ -2191,8 +2194,24 @@ def HAL_InterfaceBindingSubspanOp : HAL_Op<"interface.binding.subspan", [
     HAL_DescriptorTypeAttr:$descriptor_type,
     Optional<HAL_DeviceSize>:$byte_offset,
     HAL_ShapeDynamicDims:$dynamic_dims,
-    OptionalAttr<IndexAttr>:$alignment
+    OptionalAttr<IndexAttr>:$alignment,
+    OptionalAttr<HAL_DescriptorFlagsAttr>:$descriptor_flags
   );
+
+let builders = [
+    OpBuilder<(ins
+      "Type":$resultType,
+      "APInt":$set,
+      "APInt":$binding,
+      "IREE::HAL::DescriptorType":$descriptor_type,
+      "Value":$byte_offset,
+      "ValueRange":$dynamic_dims,
+      "IntegerAttr":$alignment,
+      CArg<"mlir::Optional<DescriptorFlags>", "llvm::None">:$flags
+    )>,
+  ];
+
+
   let results = (outs
     Res<AnyType, "", [MemAlloc]>:$result
   );
@@ -2201,8 +2220,9 @@ def HAL_InterfaceBindingSubspanOp : HAL_Op<"interface.binding.subspan", [
     `set` `(` $set `)`
     `binding` `(` $binding `)`
     `type` `(` custom<DescriptorType>($descriptor_type) `)`
-    (`offset` `(` $byte_offset^ `)`)?
     (`alignment` `(` $alignment^ `)`)?
+    (`offset` `(` $byte_offset^ `)`)?
+    (`flags` `(` $descriptor_flags^ `)`)?
     attr-dict `:` type($result) (`{` $dynamic_dims^ `}`)?
   }];
 
@@ -2211,6 +2231,9 @@ def HAL_InterfaceBindingSubspanOp : HAL_Op<"interface.binding.subspan", [
   let extraClassDeclaration = [{
     ValueRange getOperandDynamicDims(unsigned idx) { return ValueRange{}; }
     ValueRange getResultDynamicDims(unsigned idx) { return getDynamicDims(); }
+
+    // Returns the alignment of the base buffer pointer (before offset).
+    llvm::MaybeAlign getBaseAlignment();
 
     // Attempts to calculate an alignment of the final subspan offset in the
     // parent storage buffer. This is a combination of both the binding

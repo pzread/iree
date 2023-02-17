@@ -15,18 +15,45 @@ struct OneShotBufferizationOptions;
 
 namespace iree_compiler {
 
-/// Eliminate tensor.empty ops to avoid buffer allocations.
+/// Eliminates tensor.empty ops to avoid buffer allocations.
 LogicalResult eliminateEmptyTensors(
     Operation *op, const bufferization::OneShotBufferizationOptions &options);
 
-/// Bufferize the given op with One-Shot Bufferize.
+/// Bufferizes the given op with One-Shot Bufferize.
 LogicalResult runIREEOneShotBufferize(
     Operation *op, const bufferization::OneShotBufferizationOptions &options);
 
-/// Populate patterns related to tile and distribute to workgroups.
-void populateTileAndDistributeToWorkgroupsPatterns(
-    RewritePatternSet &patterns, linalg::LinalgTilingOptions options,
-    IREE::LinalgExt::LinalgTransformationFilter filter);
+/// For a given operation within a dispatch, tile and distribute the operation
+/// to workgroups as well as tile + fuse its producers. Returns the
+/// generated tiled and fused ops, as well as the loops used for distribution.
+struct TileAndFuseResult {
+  SmallVector<Operation *> tiledAndFusedOps;
+  SmallVector<scf::ForOp> loops;
+};
+FailureOr<TileAndFuseResult> tileAndFuseDispatchUsingSCFForOp(
+    TilingInterface op, linalg::LinalgTilingOptions tilingOptions,
+    PatternRewriter &rewriter);
+
+/// Pipeline shared memory copy by apply software pipelining scheduling where
+/// copy to shared memory is in stage 0 and the rest of the operations are in
+/// stage `depth - 1`.
+enum class PipeliningSchedulingStrategy {
+  // Schedule the load from global memory into stage 0 and the associated store
+  // will be in stage depth - 1.
+  loadGlobalStage0 = 0,
+  // Schedule both the load from global and the store to shared memory in stage
+  // 0. The compute operations will be in stage depth-1. This means there won't
+  // be vector registers carried between stages.
+  loadStoreStage0 = 1,
+};
+FailureOr<scf::ForOp> pipelineSharedMemoryCopy(
+    scf::ForOp forOp, PipeliningSchedulingStrategy startegy, bool peelEpilogue,
+    int64_t depth, PatternRewriter &rewriter);
+
+/// Populate patterns related to clean up the IR after tile and distribute to
+/// workgroups.
+void populateTileAndDistributeToWorkgroupsCleanupPatterns(
+    RewritePatternSet &patterns, linalg::LinalgTilingOptions options);
 
 /// Populate patterns that fold tensor.expand/collapse_shape into the source
 /// hal.interface.binding.subspan.

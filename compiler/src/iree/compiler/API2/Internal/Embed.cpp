@@ -59,6 +59,7 @@ struct GlobalInit {
   // they should be default initialized at the session level.
   BindingOptions *clBindingOptions = nullptr;
   InputDialectOptions *clInputOptions = nullptr;
+  PreprocessingOptions *clPreprocessingOptions = nullptr;
   HighLevelOptimizationOptions *clHighLevelOptimizationOptions = nullptr;
   SchedulingOptions *clSchedulingOptions = nullptr;
   IREE::HAL::TargetOptions *clHalTargetOptions = nullptr;
@@ -93,6 +94,7 @@ GlobalInit::GlobalInit(bool initializeCommandLine)
     // Bind session options to the command line environment.
     clBindingOptions = &BindingOptions::FromFlags::get();
     clInputOptions = &InputDialectOptions::FromFlags::get();
+    clPreprocessingOptions = &PreprocessingOptions::FromFlags::get();
     clHighLevelOptimizationOptions =
         &HighLevelOptimizationOptions::FromFlags::get();
     clSchedulingOptions = &SchedulingOptions::FromFlags::get();
@@ -136,6 +138,7 @@ struct Session {
   MLIRContext context;
   BindingOptions bindingOptions;
   InputDialectOptions inputOptions;
+  PreprocessingOptions preprocessingOptions;
   HighLevelOptimizationOptions highLevelOptimizationOptions;
   SchedulingOptions schedulingOptions;
   IREE::HAL::TargetOptions halTargetOptions;
@@ -155,6 +158,7 @@ Session::Session(GlobalInit &globalInit)
   if (globalInit.usesCommandLine) {
     bindingOptions = *globalInit.clBindingOptions;
     inputOptions = *globalInit.clInputOptions;
+    preprocessingOptions = *globalInit.clPreprocessingOptions;
     highLevelOptimizationOptions = *globalInit.clHighLevelOptimizationOptions;
     schedulingOptions = *globalInit.clSchedulingOptions;
     halTargetOptions = *globalInit.clHalTargetOptions;
@@ -169,6 +173,7 @@ Session::Session(GlobalInit &globalInit)
   // Register each options struct with the binder so we can manipulate
   // mnemonically via the API.
   bindingOptions.bindOptions(binder);
+  preprocessingOptions.bindOptions(binder);
   inputOptions.bindOptions(binder);
   highLevelOptimizationOptions.bindOptions(binder);
   schedulingOptions.bindOptions(binder);
@@ -182,7 +187,8 @@ struct Source {
   Source(Session &session) : session(session) {}
 
   Error *openFile(const char *filePath);
-  Error *wrapBuffer(const char *bufferName, const char *buffer, size_t length);
+  Error *wrapBuffer(const char *bufferName, const char *buffer, size_t length,
+                    bool isNullTerminated);
   Error *split(void (*callback)(iree_compiler_source_t *source, void *userData),
                void *userData);
   const llvm::MemoryBuffer *getMemoryBuffer() {
@@ -205,20 +211,28 @@ Error *Source::openFile(const char *filePath) {
 }
 
 Error *Source::wrapBuffer(const char *bufferName, const char *buffer,
-                          size_t length) {
-  // Sharp edge: MemoryBuffer::getMemBuffer will peek one past the passed length
-  // to verify a nul terminator, but this makes the API really hard to ensure
-  // memory safety for. For our API, we just require that the buffer is nul
-  // terminated and that the nul is included in the length. We then subtract
-  // by 1 when constructing the underlying MemoryBuffer. This is quite sad :(
-  if (length == 0 || buffer[length - 1] != 0) {
-    return new Error("expected nul terminated buffer");
+                          size_t length, bool isNullTerminated) {
+  std::unique_ptr<llvm::MemoryBuffer> memoryBuffer;
+  if (isNullTerminated) {
+    // Sharp edge: MemoryBuffer::getMemBuffer will peek one past the passed
+    // length to verify a null terminator, but this makes the API really hard to
+    // ensure memory safety for. For our API, we just require that the buffer is
+    // null terminated and that the null is included in the length. We then
+    // subtract by 1 when constructing the underlying MemoryBuffer. This is
+    // quite sad :(
+    if (length == 0 || buffer[length - 1] != 0) {
+      return new Error("expected null terminated buffer");
+    }
+    memoryBuffer = llvm::MemoryBuffer::getMemBuffer(
+        StringRef(buffer, length - 1),
+        StringRef(bufferName, strlen(bufferName)),
+        /*RequiresNullTerminator=*/true);
+  } else {
+    // Not a null terminated buffer.
+    memoryBuffer = llvm::MemoryBuffer::getMemBuffer(
+        StringRef(buffer, length), StringRef(bufferName, strlen(bufferName)),
+        /*RequiresNullTerminator=*/false);
   }
-  std::unique_ptr<llvm::MemoryBuffer> memoryBuffer =
-      llvm::MemoryBuffer::getMemBuffer(
-          StringRef(buffer, length - 1),
-          StringRef(bufferName, strlen(bufferName)),
-          /*RequiresNullTerminator=*/true);
   sourceMgr.AddNewSourceBuffer(std::move(memoryBuffer), llvm::SMLoc());
   return nullptr;
 }
@@ -270,13 +284,18 @@ struct Output {
   // If the output was configured to a file, this is it.
   std::unique_ptr<llvm::ToolOutputFile> outputFile;
 
+  // Description of the output. If a file, this will be the file path.
+  // Otherwise, it will be some debug-quality description.
+  std::string description;
+
   // If streaming, this is the stream.
-  llvm::raw_fd_ostream *outputStream;
+  llvm::raw_fd_ostream *outputStream = nullptr;
 };
 
 Error *Output::openFile(const char *filePath) {
   std::string err;
-  outputFile = mlir::openOutputFile(filePath, &err);
+  description = filePath;
+  outputFile = mlir::openOutputFile(description, &err);
   if (!outputFile) {
     return new Error(std::move(err));
   }
@@ -285,7 +304,9 @@ Error *Output::openFile(const char *filePath) {
 }
 
 Error *Output::openFD(int fd) {
-  outputFile = std::make_unique<llvm::ToolOutputFile>("output_file", fd);
+  description = "fd-";
+  description.append(std::to_string(fd));
+  outputFile = std::make_unique<llvm::ToolOutputFile>(description, fd);
   // Don't try to delete, etc.
   outputFile->keep();
   outputStream = &outputFile->os();
@@ -406,9 +427,9 @@ bool Invocation::runPipeline(enum iree_compiler_pipeline_t pipeline) {
 
       buildIREEVMTransformPassPipeline(
           session.bindingOptions, session.inputOptions,
-          session.highLevelOptimizationOptions, session.schedulingOptions,
-          session.halTargetOptions, session.vmTargetOptions, getHooks(),
-          passManager, *compileToPhase);
+          session.preprocessingOptions, session.highLevelOptimizationOptions,
+          session.schedulingOptions, session.halTargetOptions,
+          session.vmTargetOptions, getHooks(), passManager, *compileToPhase);
       break;
     }
     case IREE_COMPILER_PIPELINE_HAL_EXECUTABLE: {
@@ -650,6 +671,46 @@ void ireeCompilerInvocationDestroy(iree_compiler_invocation_t *inv) {
   delete unwrap(inv);
 }
 
+void ireeCompilerInvocationSetCrashHandler(
+    iree_compiler_invocation_t *inv, bool genLocalReproducer,
+    iree_compiler_error_t *(*onCrashCallback)(
+        iree_compiler_output_t **outOutput, void *userData),
+    void *userData) {
+  struct StreamImpl : public mlir::PassManager::ReproducerStream {
+    StreamImpl(iree_compiler_output_t *output) : output(output) {
+      unwrap(output)->keep();
+    }
+    ~StreamImpl() { ireeCompilerOutputDestroy(output); }
+
+    llvm::StringRef description() override {
+      return unwrap(output)->description;
+    }
+
+    llvm::raw_ostream &os() override { return *unwrap(output)->outputStream; }
+
+    iree_compiler_output_t *output;
+  };
+
+  unwrap(inv)->passManager.enableCrashReproducerGeneration(
+      [&](std::string &errorMessage)
+          -> std::unique_ptr<mlir::PassManager::ReproducerStream> {
+        iree_compiler_output_t *output = nullptr;
+        auto error = onCrashCallback(&output, userData);
+        if (error) {
+          errorMessage = ireeCompilerErrorGetMessage(error);
+          return nullptr;
+        }
+
+        if (!output) {
+          errorMessage = "callback did not set output";
+          return nullptr;
+        }
+
+        return std::make_unique<StreamImpl>(output);
+      },
+      /*genLocalReproducer=*/genLocalReproducer);
+}
+
 bool ireeCompilerInvocationParseSource(iree_compiler_invocation_t *inv,
                                        iree_compiler_source_t *source) {
   return unwrap(inv)->parseSource(*unwrap(source));
@@ -684,10 +745,11 @@ iree_compiler_error_t *ireeCompilerSourceOpenFile(
 
 iree_compiler_error_t *ireeCompilerSourceWrapBuffer(
     iree_compiler_session_t *session, const char *bufferName,
-    const char *buffer, size_t length, iree_compiler_source_t **out_source) {
+    const char *buffer, size_t length, bool isNullTerminated,
+    iree_compiler_source_t **out_source) {
   auto source = new Source(*unwrap(session));
   *out_source = wrap(source);
-  return wrap(source->wrapBuffer(bufferName, buffer, length));
+  return wrap(source->wrapBuffer(bufferName, buffer, length, isNullTerminated));
 }
 
 iree_compiler_error_t *ireeCompilerSourceSplit(

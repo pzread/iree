@@ -87,12 +87,12 @@ static LogicalResult nestedInFunc(PatternRewriter &rewriter,
   return success(functionSymbol.getLeafReference() == func.getName());
 }
 
-/// Construct a BlockAndValueMapping from `linalgOp` to `genericLinalgModelOp`.
+/// Construct a IRMapping from `linalgOp` to `genericLinalgModelOp`.
 /// Walk both ops and check whether all subops are the same.
 static LogicalResult
 haveIdenticalBodiesImpl(linalg::LinalgOp linalgOp,
                         linalg::LinalgOp genericLinalgModelOp) {
-  BlockAndValueMapping bvm;
+  IRMapping bvm;
   bvm.map(linalgOp.getBlock()->getArguments(),
           genericLinalgModelOp.getBlock()->getArguments());
   SmallVector<Operation *> linalgBodyOps;
@@ -599,7 +599,8 @@ forgetUnnecessaryHandles(transform::TransformState &state,
   for (Value operand : transform->getOperands()) {
     if (transform::isHandleConsumed(operand, transform))
       continue;
-
+    if (!operand.getType().isa<transform::TransformHandleTypeInterface>())
+      continue;
     for (Operation *payload : state.getPayloadOps(operand)) {
       if (!payload || seen.contains(payload))
         continue;
@@ -613,7 +614,8 @@ forgetUnnecessaryHandles(transform::TransformState &state,
         return !handlesUsedAfterTransform[handle];
       });
       if (allHandlesUnused) {
-        listener->removeMappings(payload);
+        // Store for mapping removal, but not remove immediately because it
+        // could invalidate other handles.
         seen.insert(payload);
       }
     }
@@ -623,13 +625,20 @@ forgetUnnecessaryHandles(transform::TransformState &state,
   for (Value result : transform->getResults()) {
     if (!result.getUses().empty())
       continue;
+    if (!result.getType().isa<transform::TransformHandleTypeInterface>())
+      continue;
     for (Operation *payload : state.getPayloadOps(result)) {
       if (!payload || seen.contains(payload))
         continue;
-      listener->removeMappings(payload);
+      // Store for mapping removal, but not remove immediately because it could
+      // invalidate other handles.
       seen.insert(payload);
     }
   }
+
+  // Remove everything in one bunch.
+  for (Operation *payload : seen)
+    listener->removeMappings(payload);
 }
 
 DiagnosedSilenceableFailure transform_ext::CanonicalizedSequenceOp::apply(
@@ -972,18 +981,18 @@ transform_ext::LowerToLLVMOp::apply(mlir::transform::TransformResults &result,
   pm.addPass(createLowerAffinePass());
   pm.addPass(createConvertSCFToCFPass());
   pm.addPass(createConvertLinalgToLLVMPass());
-  pm.addPass(createConvertVectorToLLVMPass(
-      // clang-format off
-      LowerVectorToLLVMOptions()
-        .enableReassociateFPReductions(getReassociateFpReductions())
-        .enableIndexOptimizations(getEnableIndexOptimizations())
-        .enableArmNeon(getEnableArmNeon())
-        .enableArmSVE(getEnableArmSve())
-        .enableAMX(getEnableAmx())
-        .enableX86Vector(getEnableX86vector())));
-  // clang-format on
+  {
+    auto options = ConvertVectorToLLVMPassOptions();
+    options.reassociateFPReductions = getReassociateFpReductions();
+    options.force32BitVectorIndices = getEnableIndexOptimizations();
+    options.armNeon = getEnableArmNeon();
+    options.armSVE = getEnableArmSve();
+    options.amx = getEnableAmx();
+    options.x86Vector = getEnableX86vector();
+    pm.addPass(createConvertVectorToLLVMPass(options));
+  }
   pm.addNestedPass<func::FuncOp>(createConvertMathToLLVMPass());
-  pm.addPass(createMemRefToLLVMConversionPass());
+  pm.addPass(createFinalizeMemRefToLLVMConversionPass());
   if (getEnableAsync())
     pm.addPass(createConvertAsyncToLLVMPass());
   pm.addPass(createConvertFuncToLLVMPass());
@@ -1002,119 +1011,6 @@ transform_ext::LowerToLLVMOp::apply(mlir::transform::TransformResults &result,
       funcOp.setArgAttr(i, "llvm.noalias", UnitAttr::get(funcOp.getContext()));
     }
   });
-  return DiagnosedSilenceableFailure::success();
-}
-
-//===---------------------------------------------------------------------===//
-// LowerVectorsOp
-//===---------------------------------------------------------------------===//
-
-/// Returns true of the numbered vector lowering stage is included into the list
-/// of stages specified on the given lowerVectors operation.
-static bool stageIncluded(int stage,
-                          transform_ext::LowerVectorsOp lowerVectorsOp) {
-  for (auto s : lowerVectorsOp.getStages().getAsValueRange<IntegerAttr>()) {
-    if (s.getSExtValue() == stage)
-      return true;
-  }
-  return false;
-}
-
-// Applies the transformation specified by the given lower vectors operation
-/// to the given function.
-DiagnosedSilenceableFailure
-transform_ext::LowerVectorsOp::apply(mlir::transform::TransformResults &results,
-                                     mlir::transform::TransformState &state) {
-  MLIRContext *ctx = getContext();
-  RewritePatternSet patterns(ctx);
-
-  vector::VectorTransposeLowering vectorTransposeLowering =
-      llvm::StringSwitch<vector::VectorTransposeLowering>(
-          getTransposeLowering())
-          .Case("eltwise", vector::VectorTransposeLowering::EltWise)
-          .Case("flat_transpose", vector::VectorTransposeLowering::Flat)
-          .Case("shuffle", vector::VectorTransposeLowering::Shuffle)
-          .Default(vector::VectorTransposeLowering::EltWise);
-  vector::VectorMultiReductionLowering vectorMultiReductionLowering =
-      llvm::StringSwitch<vector::VectorMultiReductionLowering>(
-          getMultireductionLowering())
-          .Case("innerreduction",
-                vector::VectorMultiReductionLowering::InnerReduction)
-          .Default(vector::VectorMultiReductionLowering::InnerParallel);
-  vector::VectorContractLowering vectorContractLowering =
-      llvm::StringSwitch<vector::VectorContractLowering>(
-          getContractionLowering())
-          .Case("matrixintrinsics", vector::VectorContractLowering::Matmul)
-          .Case("dot", vector::VectorContractLowering::Dot)
-          .Case("outerproduct", vector::VectorContractLowering::OuterProduct)
-          .Default(vector::VectorContractLowering::OuterProduct);
-  // TODO: fix the annoying name mismatch (vector-transfers vs vector-transfer).
-  vector::VectorTransferSplit vectorTransferSplit =
-      llvm::StringSwitch<vector::VectorTransferSplit>(getSplitTransfers())
-          .Case("none", vector::VectorTransferSplit::None)
-          .Case("linalg-copy", vector::VectorTransferSplit::LinalgCopy)
-          .Case("vector-transfers", vector::VectorTransferSplit::VectorTransfer)
-          .Default(vector::VectorTransferSplit::None);
-
-  vector::VectorTransformsOptions vectorTransformOptions;
-  vectorTransformOptions.setVectorTransformsOptions(vectorContractLowering)
-      .setVectorMultiReductionLowering(vectorMultiReductionLowering)
-      .setVectorTransposeLowering(vectorTransposeLowering)
-      .setVectorTransferSplit(vectorTransferSplit);
-
-  VectorTransferToSCFOptions vectorTransferToSCFOptions =
-      VectorTransferToSCFOptions().enableFullUnroll(getUnrollVectorTransfers());
-
-  int maxTransferRank = 1;
-
-  auto avx2LoweringOptions =
-      x86vector::avx2::LoweringOptions().setTransposeOptions(
-          x86vector::avx2::TransposeLoweringOptions()
-              .lower4x8xf32(getTransposeAvx2Lowering())
-              .lower8x8xf32(getTransposeAvx2Lowering()));
-
-  // TODO: this is copy-pasta from LinalgStrategyLowerVectorsPass, shouldn't be.
-  vector::populateVectorToVectorCanonicalizationPatterns(patterns);
-  if (stageIncluded(1, *this)) {
-    patterns.add<mlir::vector::ContractionOpToOuterProductOpLowering,
-                 mlir::vector::ContractionOpToMatmulOpLowering,
-                 mlir::vector::ContractionOpLowering>(vectorTransformOptions,
-                                                      ctx);
-    vector::populateVectorTransferPermutationMapLoweringPatterns(patterns);
-  }
-  if (stageIncluded(2, *this)) {
-    vector::populateVectorMultiReductionLoweringPatterns(
-        patterns, vectorTransformOptions.vectorMultiReductionLowering);
-  }
-  if (stageIncluded(3, *this)) {
-    patterns.add<vector::VectorTransferFullPartialRewriter>(
-        ctx, vectorTransformOptions);
-  }
-  if (stageIncluded(4, *this)) {
-    vector::populateVectorTransferLoweringPatterns(patterns, maxTransferRank);
-  }
-  if (stageIncluded(5, *this)) {
-    populateVectorToSCFConversionPatterns(
-        patterns, vectorTransferToSCFOptions.setTargetRank(maxTransferRank));
-  }
-  if (stageIncluded(6, *this)) {
-    vector::populateVectorShapeCastLoweringPatterns(patterns);
-  }
-  if (stageIncluded(7, (*this))) {
-    vector::populateVectorTransposeLoweringPatterns(patterns,
-                                                    vectorTransformOptions);
-    if (getTransposeAvx2Lowering())
-      x86vector::avx2::populateSpecializedTransposeLoweringPatterns(
-          patterns, avx2LoweringOptions, /*benefit=*/10);
-  }
-
-  // TODO: these transformations are currently not targeted at concrete ops.
-  // LinalgTransformationFilter filter = makeTransformationFilter(target);
-  if (failed(applyPatternsAndFoldGreedily(state.getTopLevel(),
-                                          std::move(patterns))))
-    return DiagnosedSilenceableFailure::definiteFailure();
-
-  // TODO: make composable...
   return DiagnosedSilenceableFailure::success();
 }
 
@@ -1209,6 +1105,69 @@ testMatchCallbackCallback(transform_ext::MatchCallbackResult &res, Location loc,
   return DiagnosedSilenceableFailure::success();
 }
 
+static DiagnosedSilenceableFailure testRepeatedMatcherUseCallback(
+    transform_ext::MatchCallbackResult &res, Location loc,
+    const mlir::transform::TransformState &state, ValueRange handles) {
+  if (handles.size() != 1 || state.getPayloadOps(handles[0]).size() != 1) {
+    return emitSilenceableFailure(loc)
+           << "expected one handle to one operation";
+  }
+  Operation *root = state.getPayloadOps(handles[0])[0];
+
+  transform_ext::MatcherContext matcherContext;
+  auto &operand = transform_ext::m_StructuredOp(matcherContext);
+  auto &first = transform_ext::m_StructuredOp(matcherContext).input(0, operand);
+  auto &second = transform_ext::m_StructuredOp(matcherContext)
+                     .input(0, operand)
+                     .input(1, first);
+
+  WalkResult walkResult = root->walk([&](Operation *op) {
+    second.resetCapture();
+    if (!matchPattern(op, second))
+      return WalkResult::advance();
+
+    res.addPayloadGroup({first.getCaptured()});
+    res.addPayloadGroup({second.getCaptured()});
+    return WalkResult::interrupt();
+  });
+
+  if (walkResult.wasInterrupted())
+    return DiagnosedSilenceableFailure::success();
+  return emitSilenceableFailure(loc) << "failed to match";
+}
+
+static DiagnosedSilenceableFailure
+testValueMatcherCallback(transform_ext::MatchCallbackResult &res, Location loc,
+                         const mlir::transform::TransformState &state,
+                         ValueRange handles) {
+  if (handles.size() != 1 || state.getPayloadOps(handles[0]).size() != 1) {
+    return emitSilenceableFailure(loc)
+           << "expected one handle to one operation";
+  }
+  Operation *root = state.getPayloadOps(handles[0])[0];
+
+  transform_ext::MatcherContext matcherContext;
+  auto &operand = transform_ext::m_Value(matcherContext);
+  auto &first = transform_ext::m_StructuredOp(matcherContext).input(0, operand);
+  auto &second = transform_ext::m_StructuredOp(matcherContext)
+                     .input(0, operand)
+                     .input(1, first);
+
+  WalkResult walkResult = root->walk([&](Operation *op) {
+    second.resetCapture();
+    if (!matchPattern(op, second))
+      return WalkResult::advance();
+
+    res.addPayloadGroup({first.getCaptured()});
+    res.addPayloadGroup({second.getCaptured()});
+    return WalkResult::interrupt();
+  });
+
+  if (walkResult.wasInterrupted())
+    return DiagnosedSilenceableFailure::success();
+  return emitSilenceableFailure(loc) << "failed to match";
+}
+
 /// Match callback for a reduction with optional leading and trailing
 /// elementwise operations. Matches *the first* occurrence of such a reduction
 /// within an op associated with the given handle.
@@ -1232,35 +1191,37 @@ reductionCallback(transform_ext::MatchCallbackResult &res, Location loc,
            << "expected one handle to one operation";
   }
 
-  transform_ext::StructuredOpMatcher pattern, fill, leading, trailing;
+  transform_ext::StructuredOpMatcher *pattern, *fill, *leading, *trailing;
   transform_ext::MatchedReductionCaptures ignore;
-  makeReductionMatcher(pattern, fill, leading, trailing, ignore);
+  transform_ext::MatcherContext matcherContext;
+  makeReductionMatcher(matcherContext, pattern, fill, leading, trailing,
+                       ignore);
 
   // TODO: need a mechanism for this to go around the entire IR,
   // potentially with list matches for each group.
   Operation *root = state.getPayloadOps(handles[0])[0];
 
   WalkResult walkResult = root->walk([&](Operation *op) {
-    pattern.resetCapture();
-    if (!matchPattern(op, pattern))
+    pattern->resetCapture();
+    if (!matchPattern(op, *pattern))
       return WalkResult::advance();
 
     // TODO: notify properly.
     LLVM_DEBUG({
       DBGS() << "leading:\n";
-      if (leading.getCaptured())
-        DBGS() << leading.getCaptured() << "\n";
-      DBGS() << "fill: " << fill.getCaptured() << "\n";
-      DBGS() << "pattern: " << pattern.getCaptured() << "\n";
+      if (leading->getCaptured())
+        DBGS() << leading->getCaptured() << "\n";
+      DBGS() << "fill: " << fill->getCaptured() << "\n";
+      DBGS() << "pattern: " << pattern->getCaptured() << "\n";
       DBGS() << "trailing:\n";
-      if (trailing.getCaptured())
-        DBGS() << trailing.getCaptured() << "\n";
+      if (trailing->getCaptured())
+        DBGS() << trailing->getCaptured() << "\n";
     });
 
-    res.addPotentiallyEmptyPayloadGroup(leading.getCaptured());
-    res.addPayloadGroup({fill.getCaptured()});
-    res.addPayloadGroup({pattern.getCaptured()});
-    res.addPotentiallyEmptyPayloadGroup(trailing.getCaptured());
+    res.addPotentiallyEmptyPayloadGroup(leading->getCaptured());
+    res.addPayloadGroup({fill->getCaptured()});
+    res.addPayloadGroup({pattern->getCaptured()});
+    res.addPotentiallyEmptyPayloadGroup(trailing->getCaptured());
     return WalkResult::interrupt();
   });
 
@@ -1274,6 +1235,10 @@ DiagnosedSilenceableFailure transform_ext::RegisterMatchCallbacksOp::apply(
     mlir::transform::TransformState &state) {
   auto &registry = state.addExtension<transform_ext::MatchCallbacksRegistry>();
   registry.registerCallback("_test_match_callback", testMatchCallbackCallback);
+  registry.registerCallback("_test_repeated_matcher_use_callback",
+                            testRepeatedMatcherUseCallback);
+  registry.registerCallback("_test_value_matcher_callback",
+                            testValueMatcherCallback);
   registry.registerCallback("reduction", reductionCallback);
   return DiagnosedSilenceableFailure::success();
 }

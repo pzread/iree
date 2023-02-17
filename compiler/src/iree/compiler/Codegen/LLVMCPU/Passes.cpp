@@ -12,6 +12,7 @@
 #include "iree/compiler/Codegen/LLVMCPU/KernelDispatch.h"
 #include "iree/compiler/Codegen/PassDetail.h"
 #include "iree/compiler/Codegen/Sandbox/Passes.h"
+#include "iree/compiler/Codegen/Transforms/Transforms.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/CommandLine.h"
@@ -95,6 +96,14 @@ static FailureOr<Value> cpuAllocationFn(OpBuilder &builder, Location loc,
                                         MemRefType memRefType,
                                         ValueRange dynamicSizes,
                                         unsigned alignment) {
+  auto funcOp = builder.getInsertionPoint()->getParentOfType<func::FuncOp>();
+  if (funcOp) {
+    std::optional<Value> hoistedAllocation = hoistStaticallyBoundAllocations(
+        funcOp, builder, loc, memRefType, dynamicSizes, alignment);
+    if (hoistedAllocation) {
+      return hoistedAllocation.value();
+    }
+  }
   return builder
       .create<memref::AllocaOp>(loc, memRefType, dynamicSizes,
                                 builder.getI64IntegerAttr(alignment))
@@ -134,6 +143,8 @@ static void addTileAndDistributePasses(
   }
   nestedModulePM.addNestedPass<func::FuncOp>(
       createConvertToDestinationPassingStylePass());
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      IREE::LinalgExt::createTileAndDecomposeAttentionPass());
   nestedModulePM.addNestedPass<func::FuncOp>(
       createFoldAffineMinInDistributedLoopsPass());
   nestedModulePM.addPass(createCanonicalizerPass());
@@ -269,19 +280,30 @@ LogicalResult verifyConvTileAndDecomposeExpertConfig(
   int64_t khSize, kwSize, ohSize, owSize;
   auto isSizeExtracted =
       TypeSwitch<Operation *, LogicalResult>(op)
-          .Case<linalg::Conv2DNhwcHwcfOp, linalg::DepthwiseConv2DNhwcHwcOp>(
-              [&](auto) {
-                // Shape: N, OH, OW, OC, KH, KW, (IC)
-                khSize = shape[4];
-                kwSize = shape[5];
-                ohSize = shape[1];
-                owSize = shape[2];
-                return success();
-              })
+          .Case<linalg::Conv2DNhwcHwcfOp, linalg::DepthwiseConv2DNhwcHwcOp,
+                linalg::PoolingNhwcSumOp, linalg::PoolingNhwcMaxOp,
+                linalg::PoolingNhwcMaxUnsignedOp, linalg::PoolingNhwcMinOp,
+                linalg::PoolingNhwcMinUnsignedOp, linalg::PoolingNchwSumOp,
+                linalg::PoolingNchwMaxOp>([&](auto) {
+            // Shape: N, OH, OW, OC, KH, KW, (IC)
+            khSize = shape[4];
+            kwSize = shape[5];
+            ohSize = shape[1];
+            owSize = shape[2];
+            return success();
+          })
           .Case<linalg::Conv2DNchwFchwOp>([&](auto) {
             // Shape: N, OC, OH, OW, (IC), KH, KW
             khSize = shape[5];
             kwSize = shape[6];
+            ohSize = shape[2];
+            owSize = shape[3];
+            return success();
+          })
+          .Case<linalg::PoolingNchwSumOp, linalg::PoolingNchwMaxOp>([&](auto) {
+            // Shape: N, OC, OH, OW, KH, KW
+            khSize = shape[4];
+            kwSize = shape[5];
             ohSize = shape[2];
             owSize = shape[3];
             return success();
@@ -462,6 +484,13 @@ void addMultiTilingExpertPassPipeline(OpPassManager &passManager,
   addTileAndDistributePasses(passManager);
 
   OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
+
+  // This is a temporary solution for handling aggressive fusion heuristics.
+  // This rematerializes parallel ops into the consumers to avoid stack
+  // allocation.
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      createRematerializeParallelOpsPass());
+
   {
     LinalgFusePassOptions options;
     // Run SplitReductionPass before the final reduction Fuse pass, because
@@ -583,7 +612,7 @@ void addConvTileAndDecomposeExpertPassPipeline(OpPassManager &passManager) {
   }
 }
 
-void addCPUAArchDoubleTilingExpertPassPipeline(OpPassManager &passManager) {
+void addMmt4dTilingExpertPassPipeline(OpPassManager &passManager) {
   addTileAndDistributePasses(passManager);
 
   OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
@@ -624,7 +653,7 @@ void addCPUAArchDoubleTilingExpertPassPipeline(OpPassManager &passManager) {
   addBufferizePasses(nestedModulePM);
 
   nestedModulePM.addNestedPass<func::FuncOp>(
-      createLLVMCPUAArch64VectorLoweringPass());
+      createLLVMCPUMmt4dVectorLoweringPass());
   nestedModulePM.addNestedPass<func::FuncOp>(
       createOptimizeVectorTransferPass(/*flatten=*/true));
 }
@@ -634,6 +663,8 @@ void addCPUDataTilingPipeline(OpPassManager &passManager) {
   OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
   nestedModulePM.addNestedPass<func::FuncOp>(
       IREE::LinalgExt::createLinalgExtVectorizationPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      createVectorizePackUnPackOpsPass());
   addBufferizePasses(nestedModulePM);
   nestedModulePM.addNestedPass<func::FuncOp>(
       createSplitFullPartialTransferPass("linalg-copy"));
@@ -688,6 +719,9 @@ static void addLowerToLLVMPasses(OpPassManager &passManager) {
   // math dialect elementry functions -> polynomial form.
   passManager.addNestedPass<func::FuncOp>(createPolynomialApproximationPass());
 
+  passManager.addNestedPass<func::FuncOp>(
+      createHoistStaticallyBoundAllocationsPass());
+
   // Checking stack allocation before converting to CF dialect is easier.
   // Do not check allocation if hoist-padding is enabled. It intends to allocate
   // big stack buffers for better accessing.
@@ -720,8 +754,13 @@ void buildLLVMCPUCodegenPassPipeline(OpPassManager &passManager) {
   passManager.nest<ModuleOp>().addNestedPass<func::FuncOp>(
       createTypePropagationPass());
   passManager.nest<ModuleOp>().addNestedPass<func::FuncOp>(
-      createIREEMaterializeEncodingPass());
+      createLLVMCPUMaterializeEncodingPass());
   passManager.addNestedPass<ModuleOp>(createBufferizeCopyOnlyDispatchesPass());
+  passManager.nest<ModuleOp>().addNestedPass<func::FuncOp>(
+      IREE::LinalgExt::createDecomposeSoftmaxPass());
+  // Temporary solution to avoid large allocations due to softmax lowering.
+  passManager.nest<ModuleOp>().addNestedPass<func::FuncOp>(
+      createRematerializeParallelOpsPass());
   // TODO: Remove the following pass the plumb support for #hal.descriptor_type
   // memory space through the stack.
   passManager.nest<ModuleOp>().addNestedPass<func::FuncOp>(

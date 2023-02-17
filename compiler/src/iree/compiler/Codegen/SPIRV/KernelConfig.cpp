@@ -222,8 +222,8 @@ LogicalResult setConvOpConfig(linalg::LinalgOp linalgOp,
     // and width.
     const bool tileToSquare = tileConvSquare(
         oh, ow, residualThreads, residualTilingFactor,
-        llvm::makeMutableArrayRef(workgroupSize).drop_front(),
-        llvm::makeMutableArrayRef(workgroupTileSizes).drop_front().drop_back());
+        llvm::MutableArrayRef(workgroupSize).drop_front(),
+        llvm::MutableArrayRef(workgroupTileSizes).drop_front().drop_back());
 
     // Otherwise treat OW and OH separately to allow them to have different
     // number of threads and tiling size.
@@ -386,7 +386,8 @@ static bool tileMatmulK(const int64_t dimK, const int64_t residualTilingFactor,
                         int64_t &tileSize) {
   // Deduce the configuration for the K dimension. We need some power of two
   // here so that we can do vector load.
-  for (int64_t t = llvm::PowerOf2Floor(residualTilingFactor); t >= 2; t >>= 1) {
+  for (int64_t t = llvm::bit_floor<uint64_t>(residualTilingFactor); t >= 2;
+       t >>= 1) {
     if (dimK % t == 0) {
       tileSize = t;
       return true;
@@ -1432,8 +1433,8 @@ LogicalResult initSPIRVLaunchConfig(ModuleOp module) {
     }
 
     if (computeOps.empty()) {
-      return funcOp.emitOpError(
-          "unhandled translation of function without compute ops");
+      // No compute operations found. Allow to pass through without a config.
+      continue;
     }
 
     Operation *rootOperation = nullptr;

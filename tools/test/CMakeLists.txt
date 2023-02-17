@@ -19,6 +19,7 @@ iree_lit_test_suite(
     "iree-benchmark-module.mlir"
     "iree-run-mlir.mlir"
     "iree-run-module-expected.mlir"
+    "iree-run-module-outputs.mlir"
     "iree-run-module.mlir"
     "multiple_args.mlir"
     "multiple_exported_functions.mlir"
@@ -33,6 +34,8 @@ iree_lit_test_suite(
     iree-run-mlir
     iree-run-module
     not
+  DATA
+    echo_npy.py
   LABELS
     "driver=local-task"
     "driver=vulkan"
@@ -54,7 +57,8 @@ iree_lit_test_suite(
 
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###
 
-if((IREE_TARGET_BACKEND_VMVX OR DEFINED IREE_HOST_BINARY_ROOT) AND
+if(IREE_BUILD_TESTS AND
+   (IREE_TARGET_BACKEND_VMVX OR IREE_HOST_BIN_DIR) AND
    IREE_HAL_DRIVER_LOCAL_SYNC)
   iree_bytecode_module(
     NAME
@@ -75,8 +79,8 @@ if((IREE_TARGET_BACKEND_VMVX OR DEFINED IREE_HOST_BINARY_ROOT) AND
     DRIVER
       "local-sync"
     RUNNER_ARGS
-      "--entry_function=abs"
-      "--function_input=f32=-10"
+      "--function=abs"
+      "--input=f32=-10"
     EXPECTED_OUTPUT
       "f32=10"
     DEPS

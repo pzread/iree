@@ -19,7 +19,7 @@ iree_cc_library(
     "ukernel_test_utils.cc"
   DEPS
     iree::base
-    iree::builtins::ukernel::common
+    iree::builtins::ukernel::headers
     iree::schemas::cpu_data
   PUBLIC
 )
@@ -73,6 +73,35 @@ iree_cc_test(
     pack_test
   SRCS
     "pack_test.cc"
+  DEPS
+    ::ukernel_test_utils
+    iree::base
+    iree::base::internal::cpu
+    iree::base::internal::flags
+    iree::builtins::ukernel
+    iree::testing::gtest
+)
+
+iree_cc_binary_benchmark(
+  NAME
+    unpack_benchmark
+  SRCS
+    "unpack_benchmark.c"
+  DEPS
+    ::ukernel_test_utils
+    iree::base
+    iree::base::internal::cpu
+    iree::base::internal::flags
+    iree::builtins::ukernel
+    iree::testing::benchmark
+  TESTONLY
+)
+
+iree_cc_test(
+  NAME
+    unpack_test
+  SRCS
+    "unpack_test.cc"
   DEPS
     ::ukernel_test_utils
     iree::base

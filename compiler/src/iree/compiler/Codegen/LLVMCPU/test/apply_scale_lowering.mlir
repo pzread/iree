@@ -27,8 +27,8 @@ hal.executable private @apply_scale_no_vector_feature {
         %cst = arith.constant dense<19689> : vector<2xi32>
         %cst_0 = arith.constant dense<15> : vector<2xi8>
         %c0 = arith.constant 0 : index
-        %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) offset(%c0) alignment(64) : memref<2xi32>
-        %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) offset(%c0) alignment(64) : memref<2xi32>
+        %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) : memref<2xi32>
+        %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : memref<2xi32>
         %2 = vector.load %0[%c0] : memref<2xi32>, vector<2xi32>
         %3 = "tosa.apply_scale"(%2, %cst, %cst_0) {double_round = false} : (vector<2xi32>, vector<2xi32>, vector<2xi8>) -> vector<2xi32>
         vector.store %3, %1[%c0] : memref<2xi32>, vector<2xi32>
@@ -75,8 +75,8 @@ hal.executable private @apply_scale_v {
         %cst = arith.constant dense<19689> : vector<2xi32>
         %cst_0 = arith.constant dense<15> : vector<2xi8>
         %c0 = arith.constant 0 : index
-        %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) offset(%c0) alignment(64) : memref<2xi32>
-        %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) offset(%c0) alignment(64) : memref<2xi32>
+        %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) : memref<2xi32>
+        %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : memref<2xi32>
         %2 = vector.load %0[%c0] : memref<2xi32>, vector<2xi32>
         %3 = "tosa.apply_scale"(%2, %cst, %cst_0) {double_round = false} : (vector<2xi32>, vector<2xi32>, vector<2xi8>) -> vector<2xi32>
         vector.store %3, %1[%c0] : memref<2xi32>, vector<2xi32>
@@ -121,8 +121,8 @@ hal.executable private @apply_scale_zve64x {
         %cst = arith.constant dense<19689> : vector<2xi32>
         %cst_0 = arith.constant dense<15> : vector<2xi8>
         %c0 = arith.constant 0 : index
-        %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) offset(%c0) alignment(64) : memref<2xi32>
-        %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) offset(%c0) alignment(64) : memref<2xi32>
+        %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) : memref<2xi32>
+        %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : memref<2xi32>
         %2 = vector.load %0[%c0] : memref<2xi32>, vector<2xi32>
         %3 = "tosa.apply_scale"(%2, %cst, %cst_0) {double_round = false} : (vector<2xi32>, vector<2xi32>, vector<2xi8>) -> vector<2xi32>
         vector.store %3, %1[%c0] : memref<2xi32>, vector<2xi32>
@@ -167,8 +167,8 @@ hal.executable private @apply_scale_zve32x {
         %cst = arith.constant dense<19689> : vector<2xi32>
         %cst_0 = arith.constant dense<15> : vector<2xi8>
         %c0 = arith.constant 0 : index
-        %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) offset(%c0) alignment(64) : memref<2xi32>
-        %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) offset(%c0) alignment(64) : memref<2xi32>
+        %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) : memref<2xi32>
+        %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : memref<2xi32>
         %2 = vector.load %0[%c0] : memref<2xi32>, vector<2xi32>
         %3 = "tosa.apply_scale"(%2, %cst, %cst_0) {double_round = false} : (vector<2xi32>, vector<2xi32>, vector<2xi8>) -> vector<2xi32>
         vector.store %3, %1[%c0] : memref<2xi32>, vector<2xi32>
@@ -180,8 +180,13 @@ hal.executable private @apply_scale_zve32x {
 
 // 32-bit lowering is used with '+zve32x'. Note that the 32-bit lowering
 // generates 64-bit mul operations that are decomposed into 32-bit operations by
-// the LLVM backend.
+// the LLVM backend. The backend expects both the low half to be an `llvm.mul` op.
 // CHECK-LABEL: llvm.func @apply_scale_zve32x
-//       CHECK:   %[[MUL:.*]] = llvm.mul %{{.*}}, %{{.*}} : vector<2xi64>
-//       CHECK:   %[[SHR:.*]] = llvm.lshr %{{.*}}, %{{.*}} : vector<2xi64>
+//   CHECK-DAG:   %[[RHS:.+]]    = llvm.mlir.constant(dense<19689> : vector<2xi32>) : vector<2xi32>
+//   CHECK-DAG:   %[[RHSEXT:.+]] = llvm.mlir.constant(dense<19689> : vector<2xi64>) : vector<2xi64>
+//       CHECK:   %[[LHS:.+]]    = llvm.load %{{.+}} {alignment = 4 : i64} : !llvm.ptr<vector<2xi32>>
+//       CHECK:   %[[LHSEXT:.+]] = llvm.sext %[[LHS]] : vector<2xi32> to vector<2xi64>
+//       CHECK:   %[[MULEXT:.*]] = llvm.mul %[[LHSEXT]], %[[RHSEXT]] : vector<2xi64>
+//       CHECK:   %[[MULLOW:.*]] = llvm.mul %[[LHS]], %[[RHS]] : vector<2xi32>
+//       CHECK:   %[[SHR:.*]]    = llvm.lshr %[[MULEXT]], %{{.*}} : vector<2xi64>
 //  CHECK-NEXT:   llvm.trunc %[[SHR]] : vector<2xi64> to vector<2xi32>

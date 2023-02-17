@@ -17,6 +17,7 @@ _ireeCompilerInvocationOutputVMCSource
 _ireeCompilerInvocationParseSource
 _ireeCompilerInvocationPipeline
 _ireeCompilerInvocationSetCompileToPhase
+_ireeCompilerInvocationSetCrashHandler
 _ireeCompilerInvocationSetVerifyIR
 _ireeCompilerOptionsCreate
 _ireeCompilerOptionsDestroy
@@ -134,6 +135,7 @@ _mlirAttributeIsAFlatSymbolRef
 _mlirAttributeIsAFloat
 _mlirAttributeIsAInteger
 _mlirAttributeIsAIntegerSet
+_mlirAttributeIsALocation
 _mlirAttributeIsAOpaque
 _mlirAttributeIsASparseElements
 _mlirAttributeIsAStridedLayout
@@ -291,6 +293,8 @@ _mlirF64TypeGet
 _mlirFlatSymbolRefAttrGet
 _mlirFlatSymbolRefAttrGetValue
 _mlirFloat8E4M3FNTypeGet
+_mlirFloat8E4M3FNUZTypeGet
+_mlirFloat8E5M2FNUZTypeGet
 _mlirFloat8E5M2TypeGet
 _mlirFloatAttrDoubleGet
 _mlirFloatAttrDoubleGetChecked
@@ -345,7 +349,9 @@ _mlirLinalgFillBuiltinNamedOpRegion
 _mlirLocationCallSiteGet
 _mlirLocationEqual
 _mlirLocationFileLineColGet
+_mlirLocationFromAttribute
 _mlirLocationFusedGet
+_mlirLocationGetAttribute
 _mlirLocationGetContext
 _mlirLocationNameGet
 _mlirLocationPrint
@@ -520,7 +526,9 @@ _mlirTypeIsAF16
 _mlirTypeIsAF32
 _mlirTypeIsAF64
 _mlirTypeIsAFloat8E4M3FN
+_mlirTypeIsAFloat8E4M3FNUZ
 _mlirTypeIsAFloat8E5M2
+_mlirTypeIsAFloat8E5M2FNUZ
 _mlirTypeIsAFunction
 _mlirTypeIsAIndex
 _mlirTypeIsAInteger

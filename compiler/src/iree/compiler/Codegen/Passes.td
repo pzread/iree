@@ -86,6 +86,12 @@ def EliminateEmptyTensors :
   let constructor = "mlir::iree_compiler::createEliminateEmptyTensorsPass()";
 }
 
+def HoistStaticallyBoundAllocations :
+    Pass<"iree-hoist-statically-bound-allocations", "func::FuncOp"> {
+  let summary = "Hoist statically bound alloca ops to the entry block of functions";
+  let constructor = "mlir::iree_compiler::createHoistStaticallyBoundAllocationsPass()";
+}
+
 def IREEComprehensiveBufferize :
     Pass<"iree-codegen-iree-comprehensive-bufferize", "ModuleOp"> {
   let summary = "Convert from to Linalg ops on tensors to buffers";
@@ -100,10 +106,10 @@ def IREEComprehensiveBufferize :
   ];
 }
 
-def IREEMaterializeEncoding :
-    Pass<"iree-codegen-materialize-encoding", "func::FuncOp"> {
-  let summary = "Materialize the encoding for tensor as specified by the backend";
-  let constructor = "mlir::iree_compiler::createIREEMaterializeEncodingPass()";
+def LowerUKernelOpsToCalls :
+    Pass<"iree-codegen-lower-ukernel-ops-to-calls", "ModuleOp"> {
+  let summary = "Lower micro-kernel wrapper ops into function calls";
+  let constructor = "mlir::iree_compiler::createLowerUKernelOpsToCallsPass()";
 }
 
 def OptimizeVectorTransfer :
@@ -171,6 +177,14 @@ def TensorToVectorVectorizePad :
                 "control flows";
   let constructor =
       "mlir::iree_compiler::createVectorizePadPass()";
+}
+
+def VectorizePackUnPackOps :
+    Pass<"iree-codegen-vectorize-pack-unpack-ops", "func::FuncOp"> {
+  let summary = "Vectorize a very specific form of tensor.pad with "
+                "control flows";
+  let constructor =
+      "mlir::iree_compiler::createVectorizePackUnPackOpsPass()";
 }
 
 def PolynomialApproximationPass :
@@ -312,8 +326,7 @@ def EraseHALDescriptorTypeFromMemRef :
 
 def RematerializeParallelOps :
     Pass<"iree-codegen-rematerialize-parallel-ops", "func::FuncOp"> {
-  let summary = "Pass to rematerialize and merge parallel ops to avoid"
-                "creating temporary allocs.";
+  let summary = "Pass to rematerialize and merge parallel ops to avoid creating temporary allocs.";
   let constructor = "mlir::iree_compiler::createRematerializeParallelOpsPass()";
 }
 
@@ -361,17 +374,31 @@ def LLVMCPULowerExecutableTarget :
       "mlir::iree_compiler::createLLVMCPULowerExecutableTargetPass()";
 }
 
+def LLVMCPULowerToUKernels :
+    Pass<"iree-llvmcpu-lower-to-ukernels", ""> {
+  let summary =
+      "Separate out parts of the IR that lower to a micro-kernel";
+  let constructor =
+      "mlir::iree_compiler::createLLVMCPULowerToUKernelsPass()";
+}
+
+def LLVMCPUMaterializeEncoding :
+    Pass<"iree-llvmcpu-materialize-encoding", "func::FuncOp"> {
+  let summary = "Materialize the encoding for tensor as specified by the backend";
+  let constructor = "mlir::iree_compiler::createLLVMCPUMaterializeEncodingPass()";
+}
+
 def LLVMCPUSynchronizeSymbolVisibility :
     Pass<"iree-llvmcpu-synchronize-symbol-visibility", "ModuleOp"> {
   let summary = "Synchronizes LLVM linkage with MLIR symbol visibility";
   let constructor = "mlir::iree_compiler::createLLVMCPUSynchronizeSymbolVisibilityPass()";
 }
 
-def LLVMCPUAArch64VectorLowering
-    : Pass<"iree-llvmcpu-aarch64-vector-lowering", "func::FuncOp"> {
+def LLVMCPUMmt4dVectorLowering
+    : Pass<"iree-llvmcpu-mmt4d-vector-lowering", "func::FuncOp"> {
   let summary = "Apply vector lowering logic to vector ops";
   let constructor =
-      "mlir::iree_compiler::createLLVMCPUAArch64VectorLoweringPass()";
+      "mlir::iree_compiler::createLLVMCPUMmt4dVectorLoweringPass()";
 }
 
 def LLVMCPUUnfuseFMAOps :
@@ -384,17 +411,6 @@ def VectorContractCustomKernels :
     Pass<"iree-llvmcpu-vector-contract-custom-kernels", "func::FuncOp"> {
   let summary = "Enable custom kernels (inline assembly or intrinsics) for some vector.contract ops";
   let constructor = "mlir::iree_compiler::createVectorContractCustomKernelsPass()";
-  let options = [
-    Option<"arch", "arch", "std::string",
-            /*default=*/"",
-           "Target architecture, e.g. aarch64">,
-    Option<"features", "features", "std::string",
-            /*default=*/"",
-           "Additional CPU feature flags, e.g. +dotprod">,
-    Option<"intrinsics", "intrinsics", "bool",
-            /*default=*/"false",
-           "Use intrinsics over inline assembly where applicable">,
-  ];
 }
 
 def LLVMCPULinkExecutables :
@@ -497,6 +513,12 @@ def LLVMGPUTensorPad :
 def ConvertToSPIRV : Pass<"iree-convert-to-spirv", "ModuleOp"> {
   let summary = "Perform the final conversion to SPIR-V dialect";
   let constructor = "mlir::iree_compiler::createConvertToSPIRVPass()";
+  let options = [
+    Option<"enableFastMathOption", "enable-fast-math", "bool", /*default=*/"false",
+          "Enable fast math mode during type conversion (i.e. assume no NaN/infinity)">,
+    Option<"indexBitsOption", "index-bits", "unsigned", /*default=*/"32",
+          "Specify the bit widths for SPIR-V indices">,
+  ];
 }
 
 def SPIRVVectorToGPUSubgroupMMA :
@@ -604,6 +626,13 @@ def SPIRVAnnotateWinogradLoops : Pass<"iree-spirv-annotate-winograd-loops", "fun
 //------------------------------------------------------------------------------
 // VMVX Passes
 //------------------------------------------------------------------------------
+
+def VMVXMaterializeEncoding :
+    Pass<"iree-vmvx-materialize-encoding", "func::FuncOp"> {
+  let summary = "Materialize the encoding for tensor as specified by the backend";
+  let constructor = "mlir::iree_compiler::createVMVXMaterializeEncodingPass()";
+}
+
 
 def VMVXLowerLinalgMicrokernels :
     Pass<"iree-vmvx-lower-linalg-microkernels", ""> {
