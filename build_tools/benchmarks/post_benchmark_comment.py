@@ -226,10 +226,10 @@ def main(args: argparse.Namespace):
     # workflow is triggered. But pushing the new commit means to cancel the
     # current CI run including the benchmarking. So it will unlikely fail for
     # that reason.
-    if workflow_run_sha != pr_head_sha:
-      raise ValueError(
-          f"Workflow run SHA: {workflow_run_sha} does not match "
-          f"the head SHA: {pr_head_sha} of the pull request: {pr_number}.")
+    # if workflow_run_sha != pr_head_sha:
+    #   raise ValueError(
+    #       f"Workflow run SHA: {workflow_run_sha} does not match "
+    #       f"the head SHA: {pr_head_sha} of the pull request: {pr_number}.")
 
   gist_client = GithubClient(requester=APIRequester(
       github_token=gist_bot_token))
