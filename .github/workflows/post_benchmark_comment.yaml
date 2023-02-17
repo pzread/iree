@@ -73,7 +73,7 @@ jobs:
           BENCHMARK_COMMENT_ARTIFACT: benchmark-comment.json
         run: |
           wget -O "${BENCHMARK_COMMENT_ARTIFACT}" \
-            "${PR_CI_GCS_URL}/${BENCHMARK_COMMENT_ARTIFACT}"
+            "https://storage.googleapis.com/iree-github-actions-presubmit-artifacts/4200657668/1/benchmark-comment.json"
           echo "benchmark-comment-artifact=${BENCHMARK_COMMENT_ARTIFACT}" >> "${GITHUB_OUTPUT}"
       - name: Posting comments
         if: steps.check.outputs.job-conclusion == 'success'
