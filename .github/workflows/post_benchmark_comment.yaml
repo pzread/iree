@@ -48,6 +48,8 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
+    outputs:
+      job-conclusion: ${{ steps.check.outputs.job-conclusion }}
     steps:
       - name: "Checking out repository"
         uses: actions/checkout@e2f20e631ae6d7dd3b768f56a5d2af784dd54791 # v2.5.0
@@ -57,9 +59,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BENCHMARK_PROCESS_JOB: process_benchmark_results
         run: |
-          # Assume the workflow has fewer than 100 jobs.
           export CONCLUSION=$(gh api \
-            "/repos/${GITHUB_REPOSITORY}/actions/runs/${PR_CI_RUN_ID}/attempts/${PR_CI_RUN_ATTEMPT}/jobs?per_page=100" \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${PR_CI_RUN_ID}/attempts/${PR_CI_RUN_ATTEMPT}/jobs" \
             | jq --raw-output --arg job "${BENCHMARK_PROCESS_JOB}" \
               '.jobs | map(select(.name==$job))[0] | .conclusion')
           echo "job-conclusion=${CONCLUSION}" >> "${GITHUB_OUTPUT}"
@@ -76,11 +77,12 @@ jobs:
           #   "https://storage.googleapis.com/iree-github-actions-presubmit-artifacts/4200657668/1/benchmark-comment.json"
           echo "benchmark-comment-artifact=${BENCHMARK_COMMENT_ARTIFACT}" >> "${GITHUB_OUTPUT}"
       - name: Posting comments
-        if: steps.check.outputs.job-conclusion == 'success'
+        # TODO(#11076): Temporarily disabled until we migrate the database.
+        if: true && steps.check.outputs.job-conclusion == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIST_BOT_TOKEN: ${{ secrets.GIST_BOT_TOKEN }}
-          COMMENT_BOT_USER: github-actions[bot]
+          COMMENT_BOT_USER: iree-github-actions-bot
           # Get PR number from the event instead of the untrusted comment
           # artifact, to make sure we won't incorrectly update other PRs.
           BENCHMARK_COMMENT_ARTIFACT: ${{ steps.download.outputs.benchmark-comment-artifact }}

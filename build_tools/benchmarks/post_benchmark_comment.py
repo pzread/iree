@@ -164,7 +164,9 @@ class GithubClient(object):
     """Get pull request head commit SHA."""
 
     response = self._requester.get(
-        endpoint=f"{GITHUB_IREE_API_PREFIX}/pulls/{pr_number}")
+        endpoint=f"{GITHUB_IREE_API_PREFIX}/pulls/{pr_number}",
+        payload={},
+    )
     if response.status_code != http.client.OK:
       raise RuntimeError(
           f"Failed to fetch the pull request: {pr_number}; "
@@ -179,7 +181,7 @@ def _parse_arguments():
   parser.add_argument("--verbose", action="store_true")
   verification_parser = parser.add_mutually_exclusive_group(required=True)
   verification_parser.add_argument("--github_event_json", type=pathlib.Path)
-  # Temporary option for buildkite pipeline.
+  # Temporarily option for buildkite pipeline.
   verification_parser.add_argument("--no_verify_pr", action="store_true")
   return parser.parse_args()
 
@@ -202,21 +204,23 @@ def main(args: argparse.Namespace):
   # Sanitize the pr number to make sure it is an integer.
   pr_number = int(comment_data.unverified_pr_number)
 
-  pr_client = GithubClient(requester=APIRequester(github_token=github_token))
-  if args.github_event_json is None:
+  if args.no_verify_pr:
     github_event = None
   else:
     github_event = json.loads(args.github_event_json.read_text())
+
+  pr_client = GithubClient(requester=APIRequester(github_token=github_token))
+  if github_event is not None:
     workflow_run_sha = github_event["workflow_run"]["head_sha"]
     pr_head_sha = pr_client.get_pull_request_head_commit(pr_number=pr_number)
     # We can't get the trusted PR number of a workflow run from GitHub API. So we
     # take the untrusted PR number from presubmit workflow and verify if the PR's
-    # current head SHA matches the commit SHA in the workflow run. It assumes
-    # that to generate the malicious comment data, attacker must modify the code
-    # and has a new commit SHA. So if the PR head commit matches the workflow
-    # run with attacker's commit, either the PR is created by the attacker or
-    # other's PR has the malicious commit. In both cases posting malicious
-    # comment is acceptable.
+    # current head SHA matches the commit SHA in the workflow run. It assumes that
+    # to generate the malicious comment data, attacker must modify the code and
+    # has a new commit SHA. So if the PR head commit matches the workflow run with
+    # attacker's commit, either the PR is created by the attacker or other's PR
+    # has the malicious commit. In both cases posting malicious comment is
+    # acceptable.
     #
     # Note that the collision of a target SHA1 is possible but GitHub has some
     # protections (https://github.blog/2017-03-20-sha-1-collision-detection-on-github-com/).
