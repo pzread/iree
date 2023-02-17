@@ -226,9 +226,13 @@ def main(args: argparse.Namespace):
     # protections (https://github.blog/2017-03-20-sha-1-collision-detection-on-github-com/).
     # The assumption also only holds if files in GCS can't be overwritten (so the
     # comment data can't be modified without changing the code).
+    # The check will also fail if the PR author pushes the new commit after the
+    # workflow is triggered. But pushing the new commit means to cancel the
+    # current CI run including the benchmarking. So it will unlikely fail for
+    # that reason.
     if workflow_run_sha != pr_head_sha:
       raise ValueError(
-          f"Workflow run SHA: {workflow_run_sha} mismatches "
+          f"Workflow run SHA: {workflow_run_sha} does not match "
           f"the head SHA: {pr_head_sha} of the pull request: {pr_number}.")
 
   gist_client = GithubClient(requester=APIRequester(
