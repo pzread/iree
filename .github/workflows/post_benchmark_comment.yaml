@@ -72,8 +72,8 @@ jobs:
           PR_CI_GCS_URL: https://storage.googleapis.com/iree-github-actions-${{ env.PR_CI_STAGE }}-artifacts/${{ env.PR_CI_RUN_ID }}/${{ env.PR_CI_RUN_ATTEMPT }}
           BENCHMARK_COMMENT_ARTIFACT: benchmark-comment.json
         run: |
-          wget -O "${BENCHMARK_COMMENT_ARTIFACT}" \
-            "https://storage.googleapis.com/iree-github-actions-presubmit-artifacts/4200657668/1/benchmark-comment.json"
+          # wget -O "${BENCHMARK_COMMENT_ARTIFACT}" \
+          #   "https://storage.googleapis.com/iree-github-actions-presubmit-artifacts/4200657668/1/benchmark-comment.json"
           echo "benchmark-comment-artifact=${BENCHMARK_COMMENT_ARTIFACT}" >> "${GITHUB_OUTPUT}"
       - name: Posting comments
         if: steps.check.outputs.job-conclusion == 'success'
