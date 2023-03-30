@@ -26,6 +26,9 @@ EXECUTION_BENCHMARK_CONFIG="${2:-${IREE_EXECUTION_BENCHMARK_CONFIG}}"
 TARGET_DEVICE_NAME="${3:-${IREE_TARGET_DEVICE_NAME}}"
 BENCHMARK_RESULTS="${4:-${IREE_BENCHMARK_RESULTS}}"
 
+SEED="$(basename -- ${BENCHMARK_RESULTS})"
+echo "Seed: ${SEED}"
+
 if [[ "${DEVICE_NAME}" == "a2-highgpu-1g" ]]; then
   ${DOCKER_WRAPPER} \
     --gpus all \
@@ -37,6 +40,7 @@ if [[ "${DEVICE_NAME}" == "a2-highgpu-1g" ]]; then
         --execution_benchmark_config="${EXECUTION_BENCHMARK_CONFIG}" \
         --target_device_name="${TARGET_DEVICE_NAME}" \
         --output="${BENCHMARK_RESULTS}" \
+        --seed="${SEED}" \
         --verbose
 elif [[ "${DEVICE_NAME}" == "c2-standard-16" ]]; then
   ${DOCKER_WRAPPER} \
@@ -49,6 +53,7 @@ elif [[ "${DEVICE_NAME}" == "c2-standard-16" ]]; then
         --output="${BENCHMARK_RESULTS}" \
         --device_model=GCP-c2-standard-16 \
         --cpu_uarch=CascadeLake \
+        --seed="${SEED}" \
         --verbose
 else
   echo "${DEVICE_NAME} is not supported yet."

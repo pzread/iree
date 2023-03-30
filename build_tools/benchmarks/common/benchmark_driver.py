@@ -6,6 +6,7 @@
 
 import json
 import pathlib
+import random
 import time
 from typing import Dict, Optional, Sequence, Tuple
 from common.benchmark_suite import BenchmarkCase, BenchmarkSuite
@@ -100,6 +101,7 @@ class BenchmarkDriver(object):
     gpu_target_arch = self.device_info.get_iree_gpu_arch_name()
     drivers, loaders = self.__get_available_drivers_and_loaders()
 
+    all_benchmark_cases = []
     for category, _ in self.benchmark_suite.list_categories():
       benchmark_cases = self.benchmark_suite.filter_benchmarks_for_category(
           category=category,
@@ -110,41 +112,46 @@ class BenchmarkDriver(object):
           driver_filter=self.config.driver_filter,
           mode_filter=self.config.mode_filter,
           model_name_filter=self.config.model_name_filter)
-
       for benchmark_case in benchmark_cases:
-        (benchmark_info, benchmark_results_filename,
-         capture_filename) = self.__get_benchmark_info_and_output_paths(
-             category, benchmark_case)
+        for rep in range(5):
+          all_benchmark_cases.append((category, benchmark_case, rep))
 
-        # Skip if no need to benchmark and capture.
-        if not benchmark_results_filename and not capture_filename:
-          continue
+    random.shuffle(all_benchmark_cases)
 
-        benchmark_key = str(benchmark_info)
-        print(f"--> Benchmark started: {benchmark_key} <--")
+    for category, benchmark_case, rep in all_benchmark_cases:
+      benchmark_info = self.__get_benchmark_info_from_case(
+          category=category, benchmark_case=benchmark_case)
+      benchmark_key = f"{benchmark_info}_{rep}"
+      (benchmark_results_filename, capture_filename
+      ) = self.__get_benchmark_info_and_output_paths(benchmark_key)
+      # Skip if no need to benchmark and capture.
+      if not benchmark_results_filename and not capture_filename:
+        continue
 
-        try:
-          self.run_benchmark_case(benchmark_case, benchmark_results_filename,
-                                  capture_filename)
-        except Exception as e:
-          if not self.config.keep_going:
-            raise e
+      print(f"--> Benchmark started: {benchmark_key} <--")
 
-          print(f"Processing of benchmark failed with: {e}")
-          self.benchmark_errors.append(e)
-          continue
-        finally:
-          # Some grace time.
-          time.sleep(self.benchmark_grace_time)
+      try:
+        self.run_benchmark_case(benchmark_case, benchmark_results_filename,
+                                capture_filename)
+      except Exception as e:
+        if not self.config.keep_going:
+          raise e
 
-        print("Benchmark completed")
+        print(f"Processing of benchmark failed with: {e}")
+        self.benchmark_errors.append(e)
+        continue
+      finally:
+        # Some grace time.
+        time.sleep(self.benchmark_grace_time)
 
-        if benchmark_results_filename:
-          self.finished_benchmarks[benchmark_key] = (benchmark_info,
-                                                     benchmark_results_filename)
-        if capture_filename:
-          self.finished_captures[benchmark_key] = (benchmark_info,
-                                                   capture_filename)
+      print("Benchmark completed")
+
+      if benchmark_results_filename:
+        self.finished_benchmarks[benchmark_key] = (benchmark_info,
+                                                   benchmark_results_filename)
+      if capture_filename:
+        self.finished_captures[benchmark_key] = (benchmark_info,
+                                                 capture_filename)
 
   def get_benchmark_results(self) -> BenchmarkResults:
     """Returns the finished benchmark results."""
@@ -178,14 +185,10 @@ class BenchmarkDriver(object):
     """Returns the exceptions captured during benchmarking."""
     return self.benchmark_errors
 
-  def __get_benchmark_info_and_output_paths(self, category: str,
-                                            benchmark_case: BenchmarkCase):
+  def __get_benchmark_info_and_output_paths(self, benchmark_name: str):
     """Get benchmark info and paths for the results and capture. The path of
     results/capture is None if the benchmark/capture doesn't need to be run.
     """
-    benchmark_info = self.__get_benchmark_info_from_case(
-        category=category, benchmark_case=benchmark_case)
-    benchmark_name = str(benchmark_info)
 
     benchmark_results_filename = None
     if (benchmark_name not in self.finished_benchmarks and
@@ -197,7 +200,7 @@ class BenchmarkDriver(object):
         self.config.trace_capture_config):
       capture_filename = self.config.trace_capture_config.capture_tmp_dir / f"{benchmark_name}.tracy"
 
-    return (benchmark_info, benchmark_results_filename, capture_filename)
+    return (benchmark_results_filename, capture_filename)
 
   def __get_benchmark_info_from_case(
       self, category: str, benchmark_case: BenchmarkCase) -> BenchmarkInfo:

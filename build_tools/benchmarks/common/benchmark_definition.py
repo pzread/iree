@@ -135,7 +135,7 @@ def get_iree_benchmark_module_arguments(
     # Decrease the repetition for it until it's reasonably fast.
     repetitions = 3
   else:
-    repetitions = 10
+    repetitions = 2
 
   cmd = [
       "--time_unit=ns",

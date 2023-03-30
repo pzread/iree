@@ -13,12 +13,13 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.with_name("python")))
 
 from typing import Any, List, Optional
-import typing
 import atexit
 import json
+import random
 import shutil
 import subprocess
 import tarfile
+import typing
 
 from common.benchmark_driver import BenchmarkDriver
 from common.benchmark_suite import MODEL_FLAGFILE_NAME, BenchmarkCase, BenchmarkSuite
@@ -139,6 +140,7 @@ class LinuxBenchmarkDriver(BenchmarkDriver):
 
 
 def main(args):
+  random.seed(args.seed)
   device_info = get_linux_device_info(args.device_model, args.cpu_uarch,
                                       args.gpu_id, args.verbose)
   if args.verbose:
@@ -213,6 +215,7 @@ def parse_argument():
       type=str,
       default="0",
       help="GPU ID to run the benchmark, e.g., '0' or 'GPU-<UUID>'")
+  arg_parser.add_argument("--seed", type=str)
 
   return arg_parser.parse_args()
 
