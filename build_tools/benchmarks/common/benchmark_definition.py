@@ -10,23 +10,24 @@ benchmark definitions, and benchmark result collections, so that they can be
 shared between different stages of the same benchmark pipeline.
 """
 
+from dataclasses import dataclass
+from enum import Enum
 import json
 import pathlib
 import re
 import subprocess
-
-from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-# A map from CPU ABI to IREE's benchmark target architecture.
-CPU_ABI_TO_TARGET_ARCH_MAP = {
+from e2e_test_framework.definitions import common_definitions
+
+# A map from CPU ABI to IREE's legacy benchmark target architecture.
+LEGACY_CPU_ABI_TO_TARGET_ARCH_MAP = {
     "arm64-v8a": "cpu-arm64-v8a",
-    "x86_64": "cpu-x86_64",
+    "x86_64-CascadeLake": "cpu-x86_64-cascadelake",
 }
 
-# A map from GPU name to IREE's benchmark target architecture.
-GPU_NAME_TO_TARGET_ARCH_MAP = {
+# A map from GPU name to IREE's legacy benchmark target architecture.
+LEGACY_GPU_NAME_TO_TARGET_ARCH_MAP = {
     "adreno-640": "gpu-adreno",
     "adreno-650": "gpu-adreno",
     "adreno-660": "gpu-adreno",
@@ -36,11 +37,28 @@ GPU_NAME_TO_TARGET_ARCH_MAP = {
     "tesla-v100-sxm2-16gb": "gpu-cuda-sm_70",
     "nvidia-a100-sxm4-40gb": "gpu-cuda-sm_80",
     "nvidia-geforce-rtx-3090": "gpu-cuda-sm_80",
-    "unknown": "gpu-unknown",
 }
 
-# A map of canonical microarchitecture names.
-CANONICAL_MICROARCHITECTURE_NAMES = {"CascadeLake", "Zen2"}
+# A map from CPU ABI to IREE's benchmark target architecture.
+CPU_ABI_TO_TARGET_ARCH_MAP = {
+    "arm64-v8a":
+        common_definitions.DeviceArchitecture.ARMV8_2_A_GENERIC,
+    "x86_64-cascadelake":
+        common_definitions.DeviceArchitecture.X86_64_CASCADELAKE,
+}
+
+# A map from GPU name to IREE's benchmark target architecture.
+GPU_NAME_TO_TARGET_ARCH_MAP = {
+    "adreno-640": common_definitions.DeviceArchitecture.QUALCOMM_ADRENO,
+    "adreno-650": common_definitions.DeviceArchitecture.QUALCOMM_ADRENO,
+    "adreno-660": common_definitions.DeviceArchitecture.QUALCOMM_ADRENO,
+    "adreno-730": common_definitions.DeviceArchitecture.QUALCOMM_ADRENO,
+    "mali-g77": common_definitions.DeviceArchitecture.ARM_VALHALL,
+    "mali-g78": common_definitions.DeviceArchitecture.ARM_VALHALL,
+    "tesla-v100-sxm2-16gb": common_definitions.DeviceArchitecture.CUDA_SM70,
+    "nvidia-a100-sxm4-40gb": common_definitions.DeviceArchitecture.CUDA_SM80,
+    "nvidia-geforce-rtx-3090": common_definitions.DeviceArchitecture.CUDA_SM80,
+}
 
 
 @dataclass
@@ -208,28 +226,27 @@ class DeviceInfo:
     params = ", ".join(params)
     return f"{self.platform_type.value} device <{params}>"
 
-  def get_iree_cpu_arch_name(self) -> str:
-    arch = CPU_ABI_TO_TARGET_ARCH_MAP.get(self.cpu_abi.lower())
-    if not arch:
-      raise ValueError(f"Unrecognized CPU ABI: '{self.cpu_abi}'; "
-                       "need to update the map")
-
+  def get_iree_cpu_arch_name(self,
+                             use_legacy_name: bool = False) -> Optional[str]:
+    name = self.cpu_abi.lower()
     if self.cpu_uarch:
-      if self.cpu_uarch not in CANONICAL_MICROARCHITECTURE_NAMES:
-        raise ValueError(
-            f"Unrecognized CPU microarchitecture: '{self.cpu_uarch}'; "
-            "need to update the map")
+      name += f"-{self.cpu_uarch.lower()}"
+    try:
+      if use_legacy_name:
+        return LEGACY_CPU_ABI_TO_TARGET_ARCH_MAP[name]
+      return str(CPU_ABI_TO_TARGET_ARCH_MAP[name])
+    except KeyError:
+      return None
 
-      arch = f'{arch}-{self.cpu_uarch.lower()}'
-
-    return arch
-
-  def get_iree_gpu_arch_name(self) -> str:
-    arch = GPU_NAME_TO_TARGET_ARCH_MAP.get(self.gpu_name.lower())
-    if not arch:
-      raise ValueError(f"Unrecognized GPU name: '{self.gpu_name}'; "
-                       "need to update the map")
-    return arch
+  def get_iree_gpu_arch_name(self,
+                             use_legacy_name: bool = False) -> Optional[str]:
+    name = self.gpu_name.lower()
+    try:
+      if use_legacy_name:
+        return LEGACY_GPU_NAME_TO_TARGET_ARCH_MAP[name]
+      return str(GPU_NAME_TO_TARGET_ARCH_MAP[name])
+    except KeyError:
+      return None
 
   def get_detailed_cpu_arch_name(self) -> str:
     """Returns the detailed architecture name."""

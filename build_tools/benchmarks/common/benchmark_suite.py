@@ -92,15 +92,19 @@ EXECUTION_CONFIG_TO_DRIVER_INFO_KEY_MAP: Dict[Tuple[
 class BenchmarkSuite(object):
   """Represents the benchmarks in benchmark suite directory."""
 
-  def __init__(self, suite_map: Dict[pathlib.Path, List[BenchmarkCase]]):
+  def __init__(self,
+               suite_map: Dict[pathlib.Path, List[BenchmarkCase]],
+               legacy_mode: bool = False):
     """Construct a benchmark suite.
 
     Args:
       suites: the map of benchmark cases keyed by category directories.
+      legacy_mode: is this a legacy benchmark suite.
     """
     self.suite_map = suite_map
     self.category_map = dict((category_dir.name, category_dir)
                              for category_dir in self.suite_map.keys())
+    self.legacy_mode = legacy_mode
 
   def list_categories(self) -> List[Tuple[str, pathlib.Path]]:
     """Returns all categories and their directories.
@@ -172,16 +176,18 @@ class BenchmarkSuite(object):
       model_name_with_tags = benchmark_case.model_name
       if len(benchmark_case.model_tags) > 0:
         model_name_with_tags += f"-{','.join(benchmark_case.model_tags)}"
-      if benchmark_case.run_config is not None:
-        # For the new run option, we drop the obscure old semantic and only
-        # search on model name and its tags.
-        model_and_case_name = model_name_with_tags
-      elif benchmark_case.benchmark_case_dir is not None:
+      if self.legacy_mode:
+        if benchmark_case.benchmark_case_dir is None:
+          raise ValueError(
+              "Either run_config or benchmark_case_dir must be set.")
         # For backward compatibility, model_name_filter matches against the string:
         #   <model name with tags>/<benchmark case name>
         model_and_case_name = f"{model_name_with_tags}/{benchmark_case.benchmark_case_dir.name}"
       else:
-        raise ValueError("Either run_config or benchmark_case_dir must be set.")
+        # For the new run option, we drop the obscure old semantic and only
+        # search on model name and its tags.
+        model_and_case_name = model_name_with_tags
+
       matched_model_name = (model_name_filter is None or re.match(
           model_name_filter, model_and_case_name) is not None)
 
@@ -215,11 +221,8 @@ class BenchmarkSuite(object):
             f"Can't map execution config to driver info: {module_exec_config}.")
       driver_info = IREE_DRIVERS_INFOS[driver_info_key]
 
-      arch_info = target_device_spec.architecture
-      target_arch = f"{arch_info.type.value}-{arch_info.architecture}-{arch_info.microarchitecture}"
-
       model = module_gen_config.imported_model.model
-
+      target_arch = str(target_device_spec.architecture)
       benchmark_case = BenchmarkCase(model_name=model.name,
                                      model_tags=model.tags,
                                      bench_mode=module_exec_config.tags,
@@ -273,4 +276,4 @@ class BenchmarkSuite(object):
                         benchmark_case_dir=benchmark_case_dir,
                         benchmark_tool_name=tool_name))
 
-    return BenchmarkSuite(suite_map=suite_map)
+    return BenchmarkSuite(suite_map=suite_map, legacy_mode=True)
