@@ -66,20 +66,27 @@ class BenchmarkDriver(object):
 
     legacy_mode = self.benchmark_suite.legacy_mode
 
-    cpu_target_arch = self.device_info.get_iree_cpu_arch_name(legacy_mode)
-    if cpu_target_arch is None:
-      cpu_name = self.device_info.cpu_abi
-      if self.device_info.cpu_uarch is not None:
-        cpu_name += f"-{self.device_info.cpu_uarch}"
-      print(f'WARNING: Detected unsupported CPU architecture: "{cpu_name}", '
-            'CPU benchmarking is disabled.')
-      cpu_target_arch = "unknown"
+    if self.config.use_compatible_filter:
+      cpu_target_arch = self.device_info.get_iree_cpu_arch_name(legacy_mode)
+      if cpu_target_arch is None:
+        cpu_name = self.device_info.cpu_abi
+        if self.device_info.cpu_uarch is not None:
+          cpu_name += f"-{self.device_info.cpu_uarch}"
+        print(f'WARNING: Detected unsupported CPU architecture: "{cpu_name}", '
+              'CPU benchmarking is disabled.')
+        cpu_target_arch = "unknown"
 
-    gpu_target_arch = self.device_info.get_iree_gpu_arch_name(legacy_mode)
-    if gpu_target_arch is None:
-      print('WARNING: Detected unsupported GPU architecture: '
-            f'"{self.device_info.gpu_name}", GPU benchmarking is disabled.')
-      gpu_target_arch = "unknown"
+      gpu_target_arch = self.device_info.get_iree_gpu_arch_name(legacy_mode)
+      if gpu_target_arch is None:
+        print('WARNING: Detected unsupported GPU architecture: '
+              f'"{self.device_info.gpu_name}", GPU benchmarking is disabled.')
+        gpu_target_arch = "unknown"
+
+      cpu_target_arch_filter = f"^{cpu_target_arch}$"
+      gpu_target_arch_filter = f"^{gpu_target_arch}$"
+    else:
+      cpu_target_arch_filter = None
+      gpu_target_arch_filter = None
 
     drivers, loaders = self.__get_available_drivers_and_loaders()
 
@@ -88,8 +95,8 @@ class BenchmarkDriver(object):
           category=category,
           available_drivers=drivers,
           available_loaders=loaders,
-          cpu_target_arch_filter=f"^{cpu_target_arch}$",
-          gpu_target_arch_filter=f"^{gpu_target_arch}$",
+          cpu_target_arch_filter=cpu_target_arch_filter,
+          gpu_target_arch_filter=gpu_target_arch_filter,
           driver_filter=self.config.driver_filter,
           mode_filter=self.config.mode_filter,
           model_name_filter=self.config.model_name_filter)
