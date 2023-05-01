@@ -13,49 +13,36 @@ from typing import Sequence
 sys.path.insert(0, str(pathlib.Path(__file__).parent.with_name("python")))
 
 import argparse
-from common import benchmark_definition, benchmark_presentation
 from e2e_test_framework.models import model_groups
 from e2e_test_framework.definitions import common_definitions
 from benchmark_suites.iree import benchmark_collections
 
-DEVICE_MAP = {
-    "GCP-c2-standard-16 (CPU-x86_64-CascadeLake)":
-        benchmark_definition.DeviceInfo(
-            platform_type=benchmark_definition.PlatformType.LINUX,
-            model="GCP-c2-standard-16",
-            cpu_abi="x86_64",
-            cpu_uarch="CascadeLake",
-            cpu_features=[],
-            gpu_name="Unknown"),
-    "GCP-a2-highgpu-1g (GPU-NVIDIA-A100-SXM4-40GB)":
-        benchmark_definition.DeviceInfo(
-            platform_type=benchmark_definition.PlatformType.LINUX,
-            model="GCP-a2-highgpu-1g",
-            cpu_abi="x86_64",
-            cpu_uarch=None,
-            cpu_features=[],
-            gpu_name="NVIDIA-A100-SXM4-40GB")
-}
-ARCH_MAP = {
-    "CPU-ARM64-v8A":
-        common_definitions.DeviceArchitecture.ARMV8_2_A_GENERIC,
-    "CPU-RV32-Generic":
-        common_definitions.DeviceArchitecture.RV32_GENERIC,
-    "CPU-RV64-Generic":
-        common_definitions.DeviceArchitecture.RV64_GENERIC,
-    "CPU-x86_64-CascadeLake":
-        common_definitions.DeviceArchitecture.X86_64_CASCADELAKE,
-    "GPU-CUDA-SM_80":
-        common_definitions.DeviceArchitecture.CUDA_SM80,
-    "GPU-Mali-Valhall":
-        common_definitions.DeviceArchitecture.VALHALL_MALI,
-    "GPU-Adreno":
-        common_definitions.DeviceArchitecture.ADRENO_GENERIC,
-}
+DEVICE_LIST = [
+    "Pixel-4 (CPU-ARMv8.2-A)",
+    "Pixel-6-Pro (CPU-ARMv8.2-A)",
+    "Pixel-6-Pro (GPU-Mali-G78)",
+    "XT2201-2 (GPU-Adreno-730)",
+]
+# ARCH_MAP = {
+#     "CPU-ARM64-v8A":
+#         common_definitions.DeviceArchitecture.ARMV8_2_A_GENERIC,
+#     "CPU-RV32-Generic":
+#         common_definitions.DeviceArchitecture.RV32_GENERIC,
+#     "CPU-RV64-Generic":
+#         common_definitions.DeviceArchitecture.RV64_GENERIC,
+#     "CPU-x86_64-CascadeLake":
+#         common_definitions.DeviceArchitecture.X86_64_CASCADELAKE,
+#     "GPU-CUDA-SM_80":
+#         common_definitions.DeviceArchitecture.CUDA_SM80,
+#     "GPU-Mali-Valhall":
+#         common_definitions.DeviceArchitecture.ARM_VALHALL,
+#     "GPU-Adreno":
+#         common_definitions.DeviceArchitecture.QUALCOMM_ADRENO,
+# }
 
 
 def find_model(model_name: str, model_tags: Sequence[str], model_source: str):
-  models = model_groups.ALL
+  models = model_groups.ALL_TFLITE
   matched_models = []
   for model in models:
     if (model.name.upper().startswith(model_name.upper()) and
@@ -69,6 +56,7 @@ def find_model(model_name: str, model_tags: Sequence[str], model_source: str):
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument("db_dir", type=pathlib.Path)
+  parser.add_argument("--after", type=int, default=0)
   parser.add_argument("--dry_run", action="store_true")
   args = parser.parse_args()
 
@@ -79,120 +67,140 @@ def main():
 
   replacements = {}
   for series_json in series_db.iterdir():
+
+    series_data = json.loads(series_json.read_text())
+    if int(series_data["lastBuildId"]) < args.after:
+      continue
+
     series_name = series_json.stem
     if "@" not in series_name:
-      suffix = series_name.split(" ")[-1]
-      comp_info = benchmark_definition.CompilationInfo.from_str(series_name)
-      assert series_name == f"{str(comp_info)} {suffix}"
-      matched_models = find_model(comp_info.model_name, comp_info.model_tags,
-                                  comp_info.model_source)
-      if len(matched_models) != 1:
-        print(f"{comp_info} {len(matched_models)}")
-      matched_model, = matched_models
+      pass
+      # suffix = series_name.split(" ")[-1]
+      # comp_info = benchmark_definition.CompilationInfo.from_str(series_name)
+      # assert series_name == f"{str(comp_info)} {suffix}"
+      # matched_models = find_model(comp_info.model_name, comp_info.model_tags,
+      #                             comp_info.model_source)
+      # if len(matched_models) != 1:
+      #   print(f"{comp_info} {len(matched_models)}")
+      # matched_model, = matched_models
 
-      matched_gen_configs = []
-      for gen_config in gen_configs:
-        if benchmark_collections.COMPILE_STATS_TAG not in gen_config.compile_config.tags:
-          continue
-        if gen_config.imported_model.model != matched_model:
-          continue
-        assert len(gen_config.compile_config.compile_targets) == 1
-        compile_target, = gen_config.compile_config.compile_targets
-        if ARCH_MAP[
-            comp_info.target_arch] != compile_target.target_architecture:
-          continue
+      # matched_gen_configs = []
+      # for gen_config in gen_configs:
+      #   if benchmark_collections.COMPILE_STATS_TAG not in gen_config.compile_config.tags:
+      #     continue
+      #   if gen_config.imported_model.model != matched_model:
+      #     continue
+      #   assert len(gen_config.compile_config.compile_targets) == 1
+      #   compile_target, = gen_config.compile_config.compile_targets
+      #   if ARCH_MAP[
+      #       comp_info.target_arch] != compile_target.target_architecture:
+      #     continue
 
-        diff = set(gen_config.compile_config.tags).symmetric_difference(
-            set(comp_info.compile_tags))
-        if "experimental-flags" in diff:
-          continue
-        if ("kernel-execution" in diff) != ("repeated-kernel" in diff):
-          continue
+      #   diff = set(gen_config.compile_config.tags).symmetric_difference(
+      #       set(comp_info.compile_tags))
+      #   if "experimental-flags" in diff:
+      #     continue
+      #   if ("kernel-execution" in diff) != ("repeated-kernel" in diff):
+      #     continue
 
-        matched_gen_configs.append(gen_config)
+      #   matched_gen_configs.append(gen_config)
 
-      if len(matched_gen_configs) != 1:
-        print(comp_info, matched_gen_configs)
-      matched_gen_config, = matched_gen_configs
+      # if len(matched_gen_configs) != 1:
+      #   print(comp_info, matched_gen_configs)
+      # matched_gen_config, = matched_gen_configs
 
-      model = matched_gen_config.imported_model.model
-      compile_config = matched_gen_config.compile_config
-      target_archs = []
-      for compile_target in compile_config.compile_targets:
-        arch = compile_target.target_architecture
-        target_archs.append(
-            (f"{arch.type.value}-{arch.architecture}-{arch.microarchitecture}-"
-             f"{compile_target.target_abi.value}"))
-      new_compilation_info = benchmark_definition.CompilationInfo(
-          model_name=model.name,
-          model_tags=tuple(model.tags),
-          model_source=model.source_type.value,
-          target_arch=f"[{','.join(target_archs)}]",
-          compile_tags=tuple(compile_config.tags))
-      metric_id = benchmark_presentation.METRIC_ID_MAP[suffix[1:-1]]
-      replacements[f"{comp_info} {suffix}"] = (
-          f"{matched_gen_config.composite_id()}-{metric_id}",
-          f"{new_compilation_info} {suffix}")
+      # model = matched_gen_config.imported_model.model
+      # compile_config = matched_gen_config.compile_config
+      # target_archs = []
+      # for compile_target in compile_config.compile_targets:
+      #   arch = compile_target.target_architecture
+      #   target_archs.append(
+      #       (f"{arch.type.value}-{arch.architecture}-{arch.microarchitecture}-"
+      #        f"{compile_target.target_abi.value}"))
+      # new_compilation_info = benchmark_definition.CompilationInfo(
+      #     model_name=model.name,
+      #     model_tags=tuple(model.tags),
+      #     model_source=model.source_type.value,
+      #     target_arch=f"[{','.join(target_archs)}]",
+      #     compile_tags=tuple(compile_config.tags))
+      # metric_id = benchmark_presentation.METRIC_ID_MAP[suffix[1:-1]]
+      # replacements[f"{comp_info} {suffix}"] = (
+      #     f"{matched_gen_config.composite_id()}-{metric_id}",
+      #     f"{new_compilation_info} {suffix}")
 
     else:
       device_name = series_name.split("@")[-1].strip()
-      device_info = DEVICE_MAP.get(device_name)
-      if device_info is None:
+      if device_name not in DEVICE_LIST:
         continue
-      bench_info = benchmark_definition.BenchmarkInfo.from_device_info_and_name(
-          device_info, series_name)
-      assert str(bench_info) == series_name
 
-      matched_models = find_model(bench_info.model_name, bench_info.model_tags,
-                                  bench_info.model_source)
+      (model_name, model_tags, model_source, bench_mode, _,
+       backend) = series_name.split(" ")[:6]
+      model_tags = model_tags.strip("[]").split(",")
+      model_source = model_source.strip("()")
+      bench_mode = bench_mode.split(",")
+
+      matched_models = find_model(model_name, model_tags, model_source)
       if len(matched_models) != 1:
-        print(f"{bench_info} {len(matched_models)}")
+        print(f"{series_name} {len(matched_models)}")
       matched_model, = matched_models
 
       matched_run_configs = []
       for run_config in run_configs:
         if run_config.module_generation_config.imported_model.model != matched_model:
           continue
-        if not device_info.model.endswith(
-            run_config.target_device_spec.device_name):
+        device_model = device_name.split(" ")[0]
+        if device_model != run_config.target_device_spec.device_name:
           continue
+        if "GPU" in device_name and "gpu" not in run_config.target_device_spec.tags:
+          continue
+        if "CPU" in device_name and "gpu" in run_config.target_device_spec.tags:
+          continue
+        tmp_bench_mode = set(bench_mode)
+        if "little-core" in bench_mode:
+          if "little-core" not in run_config.target_device_spec.tags:
+            continue
+          tmp_bench_mode.remove("little-core")
+        if "big-core" in bench_mode:
+          if "big-core" not in run_config.target_device_spec.tags:
+            continue
+          tmp_bench_mode.remove("big-core")
+
+        if "LLVM-CPU" in backend:
+          if "vmvx" in str(run_config):
+            continue
+        if "VMVX" in backend:
+          if "vmvx" not in str(run_config):
+            continue
 
         tags = set(run_config.module_generation_config.compile_config.tags)
         tags.update(run_config.module_execution_config.tags)
+        tags -= {"system-scheduling", "demote-f32-to-f16"}
         if "experimental-flags" in tags:
-          tags -= {"default-flags", "fuse-padding"}
+          tags -= {"default-flags", "fuse-padding", "mmt4d", "dotprod"}
+        if "repeated-kernel" in tags:
+          tags -= {"repeated-kernel", "full-inference"}
+          tags.add("kernel-execution")
 
-        if tags != set(bench_info.bench_mode):
+        if tags != tmp_bench_mode:
           continue
         matched_run_configs.append(run_config)
 
       if len(matched_run_configs) != 1:
-        print(bench_info, [(config.module_generation_config.compile_config.id,
-                            config.module_execution_config.id)
-                           for config in matched_run_configs])
+        print(series_name, [(config.module_generation_config.compile_config.id,
+                             config.module_execution_config.id)
+                            for config in matched_run_configs])
       matched_run_config, = matched_run_configs
 
-      run_tags = matched_run_config.module_execution_config.tags
-      compile_tags = matched_run_config.module_generation_config.compile_config.tags
-      new_bench_info = benchmark_definition.BenchmarkInfo(
-          model_name=matched_model.name,
-          model_tags=matched_model.tags,
-          model_source=matched_model.source_type.value,
-          bench_mode=run_tags,
-          compile_tags=compile_tags,
-          driver_info=bench_info.driver_info,
-          device_info=bench_info.device_info)
-      replacements[str(bench_info)] = (matched_run_config.composite_id(),
-                                       str(new_bench_info))
+      print(series_name)
+      print(str(matched_run_config))
+      replacements[series_name] = (matched_run_config.composite_id,
+                                   str(matched_run_config))
 
   series_info_file = args.db_dir / "infos/benchmarks.series.json"
   series_info = json.loads(series_info_file.read_text())
   new_series_info = dict(series_info)
   unlink_list = []
   for key in series_info.keys():
-    if key.startswith("MiniLML12H384Uncased [int32] (TF)"):
-      continue
-
     try:
       (replace, replace_series_name) = replacements[key]
     except KeyError:
@@ -206,9 +214,6 @@ def main():
     if replace in new_series_info:
       if value == new_series_info[replace]:
         continue
-      if key.startswith("MobileBertSquad [int8] (TFLite) CPU-ARM64-v8A"):
-        if "thread" not in key:
-          continue
       print(replace)
       print(key)
       print(value)
