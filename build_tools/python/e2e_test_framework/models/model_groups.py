@@ -7,6 +7,21 @@
 
 from e2e_test_framework.models import matmul, tflite_models, torch_models, tf_models
 
+ALL_TFLITE = [
+    tflite_models.DEEPLABV3_FP32,
+    tflite_models.MOBILESSD_FP32,
+    tflite_models.POSENET_FP32,
+    tflite_models.MOBILEBERT_FP32,
+    tflite_models.MOBILEBERT_INT8,
+    tflite_models.MOBILEBERT_FP16,
+    tflite_models.MOBILENET_V1,
+    tflite_models.MOBILENET_V2,
+    tflite_models.MOBILENET_V3SMALL,
+    tflite_models.PERSON_DETECT_INT8,
+    tflite_models.EFFICIENTNET_INT8,
+    tflite_models.MOBILENET_V2_INT8,
+]
+
 # A list of models with thread configurations.
 # Note `0` represents sync execution.
 x86_64_MODELS_AND_THREADS = [
