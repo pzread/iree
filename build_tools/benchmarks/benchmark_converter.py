@@ -23,6 +23,11 @@ DEVICE_LIST = [
     "Pixel-6-Pro (GPU-Mali-G78)",
     "XT2201-2 (GPU-Adreno-730)",
 ]
+DEVICE_NAME_MAP = {
+  "Pixel-4": "pixel-4",
+  "Pixel-6-Pro": "pixel-6-pro",
+  "XT2201-2": "moto-edge-x30",
+}
 # ARCH_MAP = {
 #     "CPU-ARM64-v8A":
 #         common_definitions.DeviceArchitecture.ARMV8_2_A_GENERIC,
@@ -149,7 +154,7 @@ def main():
         if run_config.module_generation_config.imported_model.model != matched_model:
           continue
         device_model = device_name.split(" ")[0]
-        if device_model != run_config.target_device_spec.device_name:
+        if DEVICE_NAME_MAP[device_model] != run_config.target_device_spec.device_name:
           continue
         if "GPU" in device_name and "gpu" not in run_config.target_device_spec.tags:
           continue
@@ -195,6 +200,12 @@ def main():
       print(str(matched_run_config))
       replacements[series_name] = (matched_run_config.composite_id,
                                    str(matched_run_config))
+
+  dup_check = set()
+  for composite_id, _ in replacements.items():
+    if composite_id in dup_check:
+      raise AssertionError("Dup")
+    dup_check.add(composite_id)
 
   series_info_file = args.db_dir / "infos/benchmarks.series.json"
   series_info = json.loads(series_info_file.read_text())
