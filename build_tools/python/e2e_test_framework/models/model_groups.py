@@ -138,7 +138,16 @@ X86_64_BENCHMARK_CONFIG_EXPERIMENTAL = [
         model=tf_models.BERT_LARGE_TF_FP32_SEQLEN384, threads=[8]
     ),
     common_definitions.CpuBenchmarkConfig(
+        model=tf_models.BERT_LARGE_384_FP32_TF_BATCHES[64], threads=[8]
+    ),
+    common_definitions.CpuBenchmarkConfig(
         model=torch_models.EFFICIENTNET_B7_FP32_TORCH, threads=[8]
+    ),
+    common_definitions.CpuBenchmarkConfig(
+        model=tf_models.T5_LARGE_512_FP32_TF_BATCHES[1], threads=[8]
+    ),
+    common_definitions.CpuBenchmarkConfig(
+        model=tf_models.T5_LARGE_512_FP32_TF_BATCHES[32], threads=[8]
     ),
 ]
 
