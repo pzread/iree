@@ -1145,6 +1145,63 @@ static LogicalResult setRootConfig(func::FuncOp entryPointFn,
       DispatchLoweringPassPipeline::Mmt4dTilingExpert);
 }
 
+/// Sets the lowering configuration for dispatch region for linalg.batch_mmt4d
+/// root op
+static LogicalResult setRootConfig(func::FuncOp entryPointFn,
+                                   linalg::BatchMmt4DOp mmt4dOp) {
+  assert(!getLoweringConfig(mmt4dOp) && "expected lowering_config is not set");
+  auto getDistTileSizes = [&]() -> SmallVector<int64_t> {
+    if (!mmt4dDistributionTileSizes.empty()) {
+      SmallVector<int64_t> tileSizes;
+      tileSizes.push_back(1);
+      tileSizes.append(mmt4dDistributionTileSizes.begin(),
+                       mmt4dDistributionTileSizes.end());
+      return tileSizes;
+    }
+    unsigned numLoops = mmt4dOp.getNumLoops();
+    SmallVector<int64_t> minTileSizes(numLoops, 0);
+    SmallVector<int64_t> maxTileSizes(numLoops, 0);
+    minTileSizes[0] = 0;
+    minTileSizes[1] = 4;
+    minTileSizes[2] = 4;
+    maxTileSizes[0] = 1;
+    maxTileSizes[1] = 48;
+    maxTileSizes[2] = 32;
+    SmallVector<int64_t> distTileSizes = getDefaultDistributedLevelTileSizes(
+        mmt4dOp, minTileSizes, maxTileSizes);
+    return distTileSizes;
+  };
+
+  auto getL1TileSizes = [&]() -> SmallVector<int64_t> {
+    auto lhsShape =
+        llvm::cast<ShapedType>(mmt4dOp.getInputs()[0].getType()).getShape();
+    auto rhsShape =
+        llvm::cast<ShapedType>(mmt4dOp.getInputs()[1].getType()).getShape();
+    int M0 = lhsShape[3];
+    int N0 = rhsShape[3];
+    int K0 = lhsShape[4];
+    if (!mmt4dL1TileSizes.empty()) {
+      SmallVector<int64_t> tileSizes;
+      tileSizes.push_back(1);
+      tileSizes.append(mmt4dL1TileSizes.begin(), mmt4dL1TileSizes.end());
+      return tileSizes;
+    }
+    return {1, 1, 1, 1, M0, N0, K0};
+  };
+
+  SmallVector<int64_t> parallelTileSizes = getL1TileSizes();
+  SmallVector<int64_t> reductionTileSizes;
+  splitParallelAndReductionTiles(cast<linalg::LinalgOp>(mmt4dOp.getOperation()),
+                                 parallelTileSizes, reductionTileSizes);
+
+  TileSizesListType tileSizes = {getDistTileSizes(), parallelTileSizes,
+                                 reductionTileSizes};
+
+  return setOpConfigAndEntryPointFnTranslation(
+      entryPointFn, mmt4dOp, tileSizes,
+      DispatchLoweringPassPipeline::Mmt4dTilingExpert);
+}
+
 static SmallVector<int64_t>
 getDefaultDistributionTileSizes(TilingInterface op) {
   unsigned numLoops = op.getLoopIteratorTypes().size();
@@ -1893,7 +1950,7 @@ setRootConfigImpl(func::FuncOp entryPointFn, Operation *op,
                                targetMLTransInfo);
         })
         .Case<IREE::LinalgExt::FftOp, tensor::PackOp, tensor::PadOp,
-              linalg::Mmt4DOp>(
+              linalg::Mmt4DOp, linalg::BatchMmt4DOp>(
             [&](auto op) { return setRootConfig(entryPointFn, op); })
         .Case<linalg::Conv2DNhwcHwcfOp, linalg::Conv2DNchwFchwOp,
               linalg::PoolingNhwcSumOp, linalg::PoolingNhwcMaxOp,
