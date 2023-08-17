@@ -34,6 +34,7 @@ class MatrixElemTypeId(enum.Enum):
 class ShapesId(enum.Enum):
     SMALL = "small"
     LARGE = "large"
+    BATCH_SMALL = "batch_small"
     GPU_LARGE = "gpu_large"
     GPU_LARGE_ALIGNED = "gpu_large_aligned"
 
@@ -76,6 +77,7 @@ class TestShape:
     k: int
     n: int
     accumulate: bool
+    b: typing.Optional[int] = None
 
 
 # Describes how to construct compilation info for the testcase.
@@ -136,6 +138,11 @@ def get_test_shapes(shapes_id: ShapesId):
             TestShape(m=10, k=1, n=10, accumulate=True),  # outer-product
             TestShape(m=10, k=10, n=1, accumulate=True),  # matrix*vector
             TestShape(m=10, k=10, n=1, accumulate=False),  # matrix*vector
+        ]
+    if shapes_id == ShapesId.BATCH_SMALL:
+        return [
+            TestShape(b=512, m=512, n=512, k=64, accumulate=False),
+            TestShape(b=512, m=512, n=64, k=512, accumulate=False),
         ]
     if shapes_id == ShapesId.LARGE:
         return [
@@ -336,6 +343,7 @@ class TestInputMatricesShapes:
     rhs_cols: DimSize
     acc_rows: DimSize
     acc_cols: DimSize
+    batch_size: typing.Optional[DimSize]
 
 
 # Helper for generate_function. Generates TestInputMatricesShapes, i.e.
@@ -349,6 +357,7 @@ def generate_shapes(shape: TestShape, dynamicity: Dynamicity):
         rhs_cols=shape_dim(shape.n, dynamicity),
         acc_rows=shape_dim(shape.m, dynamicity),
         acc_cols=shape_dim(shape.n, dynamicity),
+        batch_size=None if shape.b is None else shape_dim(shape.b, dynamicity),
     )
     return shapes
 
@@ -370,6 +379,7 @@ def generate_function_name(
     rhs_n = int_or_DYN(shapes.rhs_cols)
     acc_m = int_or_DYN(shapes.acc_rows)
     acc_n = int_or_DYN(shapes.acc_cols)
+    batch_dim = "" if shapes.batch_size is None else f"{int_or_DYN(shapes.batch_size)}x"
 
     info = ""
     if compilation_info:
@@ -382,7 +392,9 @@ def generate_function_name(
         info = f"_for_{compilation_info.dispatch_lowering_pass_pipeline}_{tile_workgroup_key}"
 
     matmul_kind = "matmul_accumulate" if accumulate else "matmul"
-    return f"{matmul_kind}_{lhs_m}x{lhs_k}x{input_t}_times_{rhs_k}x{rhs_n}x{input_t}_into_{acc_m}x{acc_n}x{acc_t}{info}"
+    if batch_dim != "":
+        matmul_kind = f"batch_{matmul_kind}"
+    return f"{matmul_kind}_{batch_dim}{lhs_m}x{lhs_k}x{input_t}_times_{batch_dim}{rhs_k}x{rhs_n}x{input_t}_into_{batch_dim}{acc_m}x{acc_n}x{acc_t}{info}"
 
 
 # Represents a generated test function.
@@ -412,9 +424,14 @@ def generate_function(
     rhs_n = int_or_question_mark(shapes.rhs_cols)
     acc_m = int_or_question_mark(shapes.acc_rows)
     acc_n = int_or_question_mark(shapes.acc_cols)
-    lhs_tensor_type = f"tensor<{lhs_m}x{lhs_k}x{lhs_rhs_type.value}>"
-    rhs_tensor_type = f"tensor<{rhs_k}x{rhs_n}x{lhs_rhs_type.value}>"
-    acc_tensor_type = f"tensor<{acc_m}x{acc_n}x{acc_type.value}>"
+    batch_dim = (
+        ""
+        if shapes.batch_size is None
+        else f"{int_or_question_mark(shapes.batch_size)}x"
+    )
+    lhs_tensor_type = f"tensor<{batch_dim}{lhs_m}x{lhs_k}x{lhs_rhs_type.value}>"
+    rhs_tensor_type = f"tensor<{batch_dim}{rhs_k}x{rhs_n}x{lhs_rhs_type.value}>"
+    acc_tensor_type = f"tensor<{batch_dim}{acc_m}x{acc_n}x{acc_type.value}>"
 
     # Compilation info is optional; prints empty string by default.
     func_definition = ""
@@ -446,27 +463,46 @@ def generate_function(
         func_definition = func_definition + compilation_info_string
         generate_function.compilation_index += 1
 
+    if shapes.batch_size is None:
+        op = "linalg.matmul"
+    else:
+        op = "linalg.batch_matmul"
+
     if shape.accumulate:
         func_definition = func_definition + (
             f"func.func @{func_name}(%lhs: {lhs_tensor_type}, %rhs: {rhs_tensor_type}, %acc: {acc_tensor_type}) -> {acc_tensor_type} {{\n"
-            f"  %result = linalg.matmul {compilation_info_attr}ins(%lhs, %rhs: {lhs_tensor_type}, {rhs_tensor_type}) outs(%acc: {acc_tensor_type}) -> {acc_tensor_type}\n"
+            f"  %result = {op} {compilation_info_attr}ins(%lhs, %rhs: {lhs_tensor_type}, {rhs_tensor_type}) outs(%acc: {acc_tensor_type}) -> {acc_tensor_type}\n"
             f"  return %result: {acc_tensor_type}\n"
             f"}}\n"
         )
     else:
         literal_zero_for_acc_type = "0.0" if "f" in acc_type.value else "0"
-        acc_dyn_sizes = []
         if acc_m == "?":
+            if shapes.batch_size is None:
+                init_ir = (
+                    f"  %c0 = arith.constant 0 : index\n"
+                    f"  %c1 = arith.constant 1 : index\n"
+                    f"  %acc_dim0 = tensor.dim %lhs, %c0 : {lhs_tensor_type}\n"
+                    f"  %acc_dim1 = tensor.dim %rhs, %c1 : {rhs_tensor_type}\n"
+                    f"  %init_acc = tensor.empty(%acc_dim0, %acc_dim1) : {acc_tensor_type}\n"
+                )
+            else:
+                init_ir = (
+                    f"  %c0 = arith.constant 0 : index\n"
+                    f"  %c1 = arith.constant 1 : index\n"
+                    f"  %c2 = arith.constant 2 : index\n"
+                    f"  %acc_dim0 = tensor.dim %lhs, %c0 : {lhs_tensor_type}\n"
+                    f"  %acc_dim1 = tensor.dim %lhs, %c1 : {lhs_tensor_type}\n"
+                    f"  %acc_dim2 = tensor.dim %rhs, %c2 : {rhs_tensor_type}\n"
+                    f"  %init_acc = tensor.empty(%acc_dim0, %acc_dim1, %acc_dim2) : {acc_tensor_type}\n"
+                )
+
             func_definition = func_definition + (
                 f"func.func @{func_name}(%lhs: {lhs_tensor_type}, %rhs: {rhs_tensor_type}) -> {acc_tensor_type} {{\n"
-                f"  %c0 = arith.constant 0 : index\n"
-                f"  %c1 = arith.constant 1 : index\n"
-                f"  %acc_dim0 = tensor.dim %lhs, %c0 : {lhs_tensor_type}\n"
-                f"  %acc_dim1 = tensor.dim %rhs, %c1 : {rhs_tensor_type}\n"
-                f"  %init_acc = tensor.empty(%acc_dim0, %acc_dim1) : {acc_tensor_type}\n"
-                f"  %c0_acc_type = arith.constant {literal_zero_for_acc_type}: {acc_type.value}\n"
+                + init_ir
+                + f"  %c0_acc_type = arith.constant {literal_zero_for_acc_type}: {acc_type.value}\n"
                 f"  %acc = linalg.fill ins(%c0_acc_type : {acc_type.value}) outs(%init_acc : {acc_tensor_type}) -> {acc_tensor_type}\n"
-                f"  %result = linalg.matmul {compilation_info_attr}ins(%lhs, %rhs: {lhs_tensor_type}, {rhs_tensor_type}) outs(%acc: {acc_tensor_type}) -> {acc_tensor_type}\n"
+                f"  %result = {op} {compilation_info_attr}ins(%lhs, %rhs: {lhs_tensor_type}, {rhs_tensor_type}) outs(%acc: {acc_tensor_type}) -> {acc_tensor_type}\n"
                 f"  return %result: {acc_tensor_type}\n"
                 f"}}\n"
             )
@@ -476,7 +512,7 @@ def generate_function(
                 f"  %init_acc = tensor.empty() : {acc_tensor_type}\n"
                 f"  %c0_acc_type = arith.constant {literal_zero_for_acc_type}: {acc_type.value}\n"
                 f"  %acc = linalg.fill ins(%c0_acc_type : {acc_type.value}) outs(%init_acc : {acc_tensor_type}) -> {acc_tensor_type}\n"
-                f"  %result = linalg.matmul {compilation_info_attr}ins(%lhs, %rhs: {lhs_tensor_type}, {rhs_tensor_type}) outs(%acc: {acc_tensor_type}) -> {acc_tensor_type}\n"
+                f"  %result = {op} {compilation_info_attr}ins(%lhs, %rhs: {lhs_tensor_type}, {rhs_tensor_type}) outs(%acc: {acc_tensor_type}) -> {acc_tensor_type}\n"
                 f"  return %result: {acc_tensor_type}\n"
                 f"}}\n"
             )
