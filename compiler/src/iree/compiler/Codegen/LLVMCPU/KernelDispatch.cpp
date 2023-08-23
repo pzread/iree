@@ -1224,6 +1224,31 @@ getDefaultDistributionTileSizes(TilingInterface op) {
   return distTileSizes;
 }
 
+static SmallVector<int64_t> getDefaultDistributedLevelTileSizes(
+    TilingInterface op, ArrayRef<int64_t> minTileSizes,
+    ArrayRef<int64_t> maxTileSizes, bool allowIncompleteTile = false,
+    ArrayRef<int64_t> vectorSizeHints = {}) {
+
+  unsigned numLoops = op.getLoopIteratorTypes().size();
+  // Set all the distribution tile sizes to zero if thread distribution is
+  // disabled.
+  if (clDisableDistribution) {
+    return SmallVector<int64_t>(numLoops, 0);
+  }
+
+  OpBuilder builder(op.getContext());
+  builder.setInsertionPoint(op);
+  SmallVector<Range> iterationDomain = op.getIterationDomain(builder);
+  SmallVector<int64_t> lbs, ubs;
+  getBoundsFromRange(iterationDomain, lbs, ubs);
+
+  auto partitionedLoops = cast<PartitionableLoopsInterface>(op.getOperation())
+                              .getPartitionableLoops(kNumMaxParallelDims);
+  return getDefaultDistributedLevelTileSizes(
+      partitionedLoops, lbs, ubs, minTileSizes, maxTileSizes,
+      allowIncompleteTile, vectorSizeHints);
+}
+
 static bool isPackMatmulLHS(tensor::PackOp op) {
   return op.getSourceRank() == 2 && op.getInnerDimsPos().size() == 2 &&
          op.getInnerDimsPos()[0] == 0 && op.getInnerDimsPos()[1] == 1;
@@ -1273,8 +1298,20 @@ static LogicalResult
 setUnPackOpRootConfig(func::FuncOp entryPointFn, tensor::UnPackOp op,
                       DispatchLoweringPassPipeline pipeline =
                           DispatchLoweringPassPipeline::CPUDataTiling) {
+
+  auto tilingOp = cast<TilingInterface>(op.getOperation());
+  unsigned numLoops = tilingOp.getLoopIteratorTypes().size();
+  SmallVector<int64_t> minTileSizes(numLoops, 1);
+  SmallVector<int64_t> maxTileSizes(numLoops, defaultDistTileSize);
+
+  if (numLoops > 2) {
+    for (unsigned i = 0; i < numLoops - 2; i++) {
+      maxTileSizes[i] = 1;
+    }
+  }
+
   SmallVector<int64_t> distTileSizes =
-      getDefaultDistributionTileSizes(cast<TilingInterface>(op.getOperation()));
+      getDefaultDistributedLevelTileSizes(tilingOp, minTileSizes, maxTileSizes);
 
   // Fixup for making distTileSizes be multiple of inner_tile_sizes.
   SmallVector<int64_t> innerTiles = op.getStaticTiles();
