@@ -132,6 +132,8 @@ void buildGlobalOptimizationPassPipeline(
   pipeline.addPass(createCanonicalizerPass());
   pipeline.addPass(createCSEPass());
 
+  FunctionLikeNest(pipeline).addPass(createHoistLoopInvariantOpsPass);
+
   if (transformOptions.options.constExprHoisting) {
     buildGlobalOptExprHoistingPassPipeline(pipeline, transformOptions);
   }

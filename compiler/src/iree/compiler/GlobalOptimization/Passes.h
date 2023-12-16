@@ -105,6 +105,10 @@ std::unique_ptr<Pass> createSetEncodingPass();
 // on operands/result.
 std::unique_ptr<Pass> createLiftGenericToTransposeBatchMatmulPass();
 
+// TODO
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createHoistLoopInvariantOpsPass();
+
 void registerGlobalOptimizationPipeline();
 
 } // namespace mlir::iree_compiler::GlobalOptimization

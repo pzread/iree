@@ -114,4 +114,9 @@ def SetEncoding : Pass<"iree-global-opt-set-encoding", ""> {
   let constructor = "mlir::iree_compiler::GlobalOptimization::createSetEncodingPass()";
 }
 
+def HoistLoopInvariantOps : InterfacePass<"iree-global-hoist-loop-invariant-ops", "mlir::FunctionOpInterface"> {
+  let summary = "Hoist ops that are loop invariants.";
+  let constructor = "mlir::iree_compiler::GlobalOptimization::createHoistLoopInvariantOpsPass()";
+}
+
 #endif // IREE_COMPILER_GLOBALOPTIMIZATION_PASSES
